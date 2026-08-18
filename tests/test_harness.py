@@ -1,0 +1,208 @@
+"""Harness invariants (Phase 2). All CPU, all synthetic, runs in seconds.
+
+The three invariants from the project plan:
+  1. Averaging two identical clients must return the identical model.
+  2. A one-client federation must equal centralised training on that client.
+  3. Client weights must sum to one (and be non-negative).
+
+Plus sanity checks that pin down the loss and the FedOpt server math.
+
+Determinism notes: tests use a plain nn.Linear (no dropout/BN), SGD (stateless,
+so per-round optimizer re-initialisation is a no-op), and shuffle=False loaders
+sized so that local_steps == batches_per_epoch — which makes the federated
+data order identical to the centralised one.
+"""
+
+import math
+import sys
+from pathlib import Path
+
+import pytest
+import torch
+from torch import nn
+from torch.utils.data import DataLoader, TensorDataset
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from fedisic.fed.averaging import (  # noqa: E402
+    check_weights,
+    normalized_client_weights,
+    weighted_average,
+)
+from fedisic.fed.simulate import Client, FedConfig, run_federated  # noqa: E402
+from fedisic.fed.strategies import ServerOptimizer, local_train  # noqa: E402
+from fedisic.losses import WeightedFocalLoss, inverse_frequency_alpha  # noqa: E402
+
+D, C = 5, 3  # feature dim, classes
+
+
+def make_dataset(n=40, seed=0):
+    g = torch.Generator().manual_seed(seed)
+    X = torch.randn(n, D, generator=g)
+    y = torch.randint(0, C, (n,), generator=g)
+    return TensorDataset(X, y)
+
+
+def make_loader(ds, bs=8):
+    return DataLoader(ds, batch_size=bs, shuffle=False)
+
+
+def make_client(cid, ds, bs=8):
+    return Client(
+        id=cid,
+        name=f"c{cid}",
+        train_loader=make_loader(ds, bs),
+        test_loader=None,
+        n_train=len(ds),
+        loss_fn=nn.CrossEntropyLoss(),
+    )
+
+
+def linear_model(seed=0):
+    torch.manual_seed(seed)
+    return nn.Linear(D, C)
+
+
+def sd_allclose(a, b, atol=1e-6):
+    assert set(a.keys()) == set(b.keys())
+    return all(torch.allclose(a[k], b[k], atol=atol) for k in a)
+
+
+def sd_distance(a, b):
+    return sum(torch.norm(a[k].float() - b[k].float()).item() for k in a)
+
+
+# ---------------------------- invariant 3 ---------------------------------- #
+
+def test_weights_must_sum_to_one():
+    with pytest.raises(ValueError):
+        check_weights([0.5, 0.4])
+    with pytest.raises(ValueError):
+        check_weights([1.5, -0.5])
+    check_weights(normalized_client_weights([9930, 3163, 2691, 1807, 655, 351]))
+
+
+def test_weighted_average_hand_check():
+    sd1 = {"w": torch.zeros(2, 2)}
+    sd2 = {"w": torch.full((2, 2), 2.0)}
+    out = weighted_average([sd1, sd2], [0.75, 0.25])
+    assert torch.allclose(out["w"], torch.full((2, 2), 0.5))
+
+
+def test_integer_buffers_keep_dtype():
+    # BatchNorm's num_batches_tracked is int64; averaging must not change dtype.
+    sd1 = {"b": torch.tensor(3, dtype=torch.int64)}
+    sd2 = {"b": torch.tensor(3, dtype=torch.int64)}
+    out = weighted_average([sd1, sd2], [0.5, 0.5])
+    assert out["b"].dtype == torch.int64
+    assert out["b"].item() == 3
+
+
+# ---------------------------- invariant 1 ---------------------------------- #
+
+def test_identical_clients_average_to_identical_model():
+    ds = make_dataset()
+    clients = [make_client(0, ds), make_client(1, ds)]
+    model = linear_model()
+    init = {k: v.clone() for k, v in model.state_dict().items()}
+
+    cfg = FedConfig(strategy="fedavg", rounds=2, local_steps=5, lr=0.1,
+                    optimizer="sgd", device="cpu")
+    fed_sd = run_federated(model, clients, cfg)
+
+    solo = linear_model()
+    solo.load_state_dict(init)
+    solo_sd = run_federated(solo, [make_client(0, ds)], cfg)
+    assert sd_allclose(fed_sd, solo_sd)
+
+
+# ---------------------------- invariant 2 ---------------------------------- #
+
+def test_one_client_federation_equals_centralized():
+    ds = make_dataset(n=40)  # 40 samples / batch 8 = 5 batches = local_steps
+    model = linear_model()
+    init = {k: v.clone() for k, v in model.state_dict().items()}
+
+    cfg = FedConfig(strategy="fedavg", rounds=3, local_steps=5, lr=0.05,
+                    optimizer="sgd", device="cpu")
+    fed_sd = run_federated(model, [make_client(0, ds)], cfg)
+
+    central = linear_model()
+    central.load_state_dict(init)
+    local_train(central, make_loader(ds, 8), nn.CrossEntropyLoss(),
+                steps=15, lr=0.05, device="cpu", optimizer="sgd")
+    assert sd_allclose(fed_sd, dict(central.state_dict()))
+
+
+# ---------------------------- strategies ----------------------------------- #
+
+def test_fedprox_mu_zero_matches_fedavg():
+    ds = make_dataset()
+    model_a = linear_model()
+    init = {k: v.clone() for k, v in model_a.state_dict().items()}
+
+    cfg_avg = FedConfig(strategy="fedavg", rounds=2, local_steps=5, lr=0.1,
+                        optimizer="sgd", device="cpu")
+    sd_avg = run_federated(model_a, [make_client(0, ds), make_client(1, make_dataset(seed=1))], cfg_avg)
+
+    model_b = linear_model()
+    model_b.load_state_dict(init)
+    cfg_prox = FedConfig(strategy="fedprox", prox_mu=0.0, rounds=2, local_steps=5,
+                         lr=0.1, optimizer="sgd", device="cpu")
+    sd_prox = run_federated(model_b, [make_client(0, ds), make_client(1, make_dataset(seed=1))], cfg_prox)
+    assert sd_allclose(sd_avg, sd_prox)
+
+
+def test_fedprox_pulls_updates_toward_global():
+    ds0, ds1 = make_dataset(seed=0), make_dataset(seed=1)
+    model_a = linear_model()
+    init = {k: v.clone() for k, v in model_a.state_dict().items()}
+
+    cfg_avg = FedConfig(strategy="fedavg", rounds=3, local_steps=5, lr=0.1,
+                        optimizer="sgd", device="cpu")
+    sd_avg = run_federated(model_a, [make_client(0, ds0), make_client(1, ds1)], cfg_avg)
+
+    model_b = linear_model()
+    model_b.load_state_dict(init)
+    cfg_prox = FedConfig(strategy="fedprox", prox_mu=10.0, rounds=3, local_steps=5,
+                         lr=0.1, optimizer="sgd", device="cpu")
+    sd_prox = run_federated(model_b, [make_client(0, ds0), make_client(1, ds1)], cfg_prox)
+
+    assert sd_distance(sd_prox, init) < sd_distance(sd_avg, init)
+
+
+def test_fedadagrad_server_step_numeric():
+    opt = ServerOptimizer("fedadagrad", trainable_keys=["w"], lr=0.1,
+                          beta1=0.9, beta2=0.99, tau=1e-3)
+    g = {"w": torch.zeros(1)}
+    a = {"w": torch.ones(1)}
+    out = opt.step(g, a)
+    # delta=1, m=(1-0.9)*1=0.1, v=tau^2+1, step = lr*m/(sqrt(v)+tau)
+    expected = 0.1 * 0.1 / (math.sqrt(1.0 + 1e-6) + 1e-3)
+    assert torch.allclose(out["w"], torch.tensor([expected]), atol=1e-8)
+
+
+def test_fedopt_buffers_take_plain_average():
+    opt = ServerOptimizer("fedadam", trainable_keys=["w"], lr=0.1)
+    g = {"w": torch.zeros(1), "running_mean": torch.tensor([5.0])}
+    a = {"w": torch.ones(1), "running_mean": torch.tensor([7.0])}
+    out = opt.step(g, a)
+    assert out["running_mean"].item() == pytest.approx(7.0)
+    assert out["w"].item() != pytest.approx(1.0)  # adaptive step, not the raw average
+
+
+# ------------------------------- loss --------------------------------------- #
+
+def test_focal_reduces_to_cross_entropy_at_gamma0():
+    torch.manual_seed(0)
+    logits = torch.randn(16, C)
+    y = torch.randint(0, C, (16,))
+    fl = WeightedFocalLoss(alpha=torch.ones(C), gamma=0.0)(logits, y)
+    ce = torch.nn.functional.cross_entropy(logits, y)
+    assert torch.allclose(fl, ce, atol=1e-6)
+
+
+def test_inverse_frequency_alpha_handles_absent_classes():
+    a = inverse_frequency_alpha([10, 0, 30], 3)
+    assert a[1] == 0.0
+    assert a[0] > a[2] > 0.0
