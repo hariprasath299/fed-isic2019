@@ -27,6 +27,21 @@ def resolve_device(device: str) -> str:
     return device
 
 
+def autocast_dtype() -> torch.dtype:
+    """Pick the AMP dtype: bfloat16 where available, float16 otherwise.
+
+    EfficientNet-B0's later blocks produce activations that overflow float16
+    (features[6] hits inf on a real Fed-ISIC2019 batch, and inf-inf makes the
+    logits NaN on the very first forward pass, before any weight update).
+    bfloat16 keeps float32's exponent range, so it cannot overflow that way.
+    float16 stays the fallback for cards without bf16 support, where it must be
+    paired with a GradScaler.
+    """
+    if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+        return torch.bfloat16
+    return torch.float16
+
+
 class CsvLogger:
     """Append-only CSV logger. Header comes from the first row's keys.
 

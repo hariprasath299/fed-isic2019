@@ -17,6 +17,8 @@ from typing import Dict, List, Optional, Sequence
 
 import torch
 
+from fedisic.utils import autocast_dtype
+
 FEDOPT_STRATEGIES = ("fedadam", "fedyogi", "fedadagrad")
 ALL_STRATEGIES = ("fedavg", "fedprox") + FEDOPT_STRATEGIES
 
@@ -56,10 +58,14 @@ def local_train(
     params = [p for p in model.parameters() if p.requires_grad]
     if opt is None:
         opt = make_optimizer(optimizer, params, lr)
-    scaler = torch.amp.GradScaler("cuda") if use_amp else None
+    amp_dtype = autocast_dtype() if use_amp else None
+    # A GradScaler is only needed for float16; bfloat16 has float32's range.
+    scaler = (
+        torch.amp.GradScaler("cuda") if use_amp and amp_dtype is torch.float16 else None
+    )
 
     data_iter = iter(loader)
-    for _ in range(int(steps)):
+    for step in range(int(steps)):
         try:
             xb, yb = next(data_iter)
         except StopIteration:
@@ -70,16 +76,26 @@ def local_train(
 
         opt.zero_grad(set_to_none=True)
         if use_amp:
-            with torch.autocast("cuda"):
+            with torch.autocast("cuda", dtype=amp_dtype):
                 loss = loss_fn(model(xb), yb)
         else:
             loss = loss_fn(model(xb), yb)
+
+        # A non-finite loss poisons every weight within a few steps and the run
+        # keeps going: argmax over NaN logits always returns class 0, which scores
+        # exactly chance and reads like a plausible bad-hyperparameter result.
+        # Stop instead of writing hours of that to disk.
+        if not torch.isfinite(loss):
+            raise RuntimeError(
+                f"Non-finite loss ({loss.item()}) at local step {step + 1}. "
+                f"amp={use_amp} dtype={amp_dtype} lr={lr}. Training aborted."
+            )
 
         if prox_mu > 0.0 and global_params is not None:
             prox = sum(((p - g) ** 2).sum() for p, g in zip(params, global_params))
             loss = loss + 0.5 * prox_mu * prox
 
-        if use_amp:
+        if scaler is not None:
             scaler.scale(loss).backward()
             scaler.step(opt)
             scaler.update()

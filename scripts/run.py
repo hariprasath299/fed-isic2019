@@ -102,7 +102,12 @@ def parse_args():
     ap.add_argument("--run-name", default=None)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="auto")
-    ap.add_argument("--amp", action="store_true", help="mixed precision (finetune on GPU)")
+    ap.add_argument(
+        "--amp",
+        action="store_true",
+        help="mixed precision (finetune on GPU); uses bfloat16 where supported, "
+        "because float16 overflows EfficientNet-B0 and NaNs the run",
+    )
     ap.add_argument("--num-workers", type=int, default=2)
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--no-augment", action="store_true", help="disable train-time augmentation")
