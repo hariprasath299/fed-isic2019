@@ -4,9 +4,11 @@ Runbook for the one session that produces `fed_finetune_fedavg_s0`. Every
 parameter here is already fixed by the sweep and the pre-registration; nothing
 in this file is a fresh choice.
 
-**Analysis frozen at commit `d7235ea`** (2026-08-20 06:21:35 +1000), which
-predates any federated finetune run. Do not amend the analysis after this
-session starts — that is the point of the freeze.
+**Analysis frozen at tag `d1-frozen`.** The tag is the pin: it is stable
+across later doc-only commits, and it predates any federated finetune run. Do
+not amend the analysis after this session starts — that is the point of the
+freeze. The seed-aggregation amendment it carries is commit `d7235ea`
+(2026-08-20 06:21:35 +1000).
 
 Locked settings, for reference while reading the cells below:
 
@@ -55,13 +57,13 @@ del GH_TOKEN, url  # keep the token out of later cell output and history
 ```bash
 %cd /content/skin-care
 !git remote set-url origin https://github.com/hariprasath299/fed-isic2019.git
-!git checkout d7235ea
+!git checkout d1-frozen
 !git log --oneline -1
 ```
 
 The `set-url` strips the token back out of `.git/config`, so a later `!git
 remote -v` or an exported notebook cannot expose it. Expect the checkout to
-report a detached HEAD at `d7235ea` — that is the frozen analysis commit and
+report a detached HEAD at `d1-frozen` — that is the frozen analysis point and
 is deliberate.
 
 Everything lives on `/content` (local SSD), never a mounted Drive — SPEC §8.
@@ -177,12 +179,14 @@ session** and are a separate decision.
 
 ---
 
-## Not yet implemented
+## Implemented and verified before the freeze
 
-The size-stratum rows (small/mid/large) are pre-registered but
-`aggregate_results.py` currently emits per-centre, union and mean-over-centres
-only. The stratum estimator is a direct reuse of `score_rows_on_draw` — the
-draw is already stratified within centre — but it is not written yet. It must
-land **before** the D1 aggregate, and being analysis code frozen by the
-amendment, it should be reviewed as an implementation of the existing
-pre-registration rather than a change to it.
+The size-stratum rows (small/mid/large) are implemented and render. They come
+from the same centre-subset statistic as the per-centre and union rows, so a
+singleton stratum equals its centre's row and the all-centre stratum equals
+the union — asserted by exact equality in the tests, 26/26 green.
+
+Pooled-vs-local strata already show why pooling mattered: `small` (n=252) is
++0.2528 with both seeds agreeing in sign, against c5 alone (n=88) whose
+interval spans 0.42. H1 and H2 concern `fed − local` and remain untested,
+which is what this session is for.
