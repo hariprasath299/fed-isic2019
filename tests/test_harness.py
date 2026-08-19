@@ -17,6 +17,7 @@ import math
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 from torch import nn
@@ -243,3 +244,67 @@ def test_agg_over_seeds_never_fakes_a_std_for_one_seed():
     assert mean == pytest.approx(0.75)
     assert std == pytest.approx(0.0707, abs=1e-4)  # ddof=1, not the population std
     assert n == 2
+
+
+def test_fast_balanced_accuracy_matches_sklearn():
+    """The bootstrap runs tens of thousands of evaluations, so it uses a
+    bincount implementation instead of sklearn. It must agree exactly,
+    including when y_pred contains classes absent from y_true."""
+    from sklearn.metrics import balanced_accuracy_score
+
+    from scripts.aggregate_results import fast_balanced_accuracy
+
+    rng = np.random.default_rng(0)
+    for _ in range(20):
+        y = rng.integers(0, 8, 200)
+        p = rng.integers(0, 8, 200)
+        assert fast_balanced_accuracy(y, p, 8) == pytest.approx(
+            balanced_accuracy_score(y, p)
+        )
+    # y_true missing several classes entirely
+    y = rng.integers(0, 3, 100)
+    p = rng.integers(0, 8, 100)
+    assert fast_balanced_accuracy(y, p, 8) == pytest.approx(balanced_accuracy_score(y, p))
+
+
+def test_paired_delta_of_a_model_against_itself_is_exactly_zero():
+    """Same predictions on both sides means every replicate differences to 0,
+    so the interval must be exactly [0, 0] -- no width from resampling noise.
+    This is what pairing buys and an unpaired comparison cannot deliver."""
+    from scripts.aggregate_results import paired_bootstrap_delta
+
+    rng = np.random.default_rng(1)
+    y = rng.integers(0, 8, 300)
+    p = rng.integers(0, 8, 300)
+    d, lo, hi = paired_bootstrap_delta(y, p, p.copy(), n_boot=200, alpha=0.05, seed=0)
+    assert (d, lo, hi) == (0.0, 0.0, 0.0)
+
+
+def test_paired_ci_is_narrower_than_unpaired_on_correlated_predictions():
+    """Two arms that agree on most images have correlated errors. Pairing
+    cancels that shared noise, so the interval on the difference must be
+    strictly tighter than one built from the two marginal CIs."""
+    from scripts.aggregate_results import fast_balanced_accuracy, paired_bootstrap_delta
+
+    rng = np.random.default_rng(2)
+    n = 600
+    y = rng.integers(0, 8, n)
+    # arm A: right 70% of the time. arm B: copies A except on a few images.
+    p_a = np.where(rng.random(n) < 0.70, y, rng.integers(0, 8, n))
+    flip = rng.random(n) < 0.08
+    p_b = np.where(flip, rng.integers(0, 8, n), p_a)
+
+    _, lo, hi = paired_bootstrap_delta(y, p_a, p_b, n_boot=400, alpha=0.05, seed=0)
+    paired_width = hi - lo
+
+    # unpaired: independent resamples per arm, differenced
+    rng2 = np.random.default_rng(0)
+    diffs = np.empty(400)
+    for b in range(400):
+        ia = rng2.integers(0, n, n)
+        ib = rng2.integers(0, n, n)
+        diffs[b] = fast_balanced_accuracy(y[ia], p_a[ia], 8) - fast_balanced_accuracy(
+            y[ib], p_b[ib], 8
+        )
+    ulo, uhi = np.quantile(diffs, [0.025, 0.975])
+    assert paired_width < (uhi - ulo)

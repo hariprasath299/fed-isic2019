@@ -159,7 +159,75 @@ def score_run(per_centre, n_boot, alpha, seed):
     centres = [out[f"c{c}"][0] for c in range(NUM_CLIENTS)]
     out["mean_centres"] = (float(np.mean(centres)), float("nan"), float("nan"))
     out["_pooled_preds"] = (Y, P)
+    out["_per_centre"] = per_centre
     return out
+
+
+def fast_balanced_accuracy(y, p, num_classes=NUM_CLASSES):
+    """Mean recall over the classes present in y_true.
+
+    Same definition as sklearn's balanced_accuracy_score (asserted in the
+    tests), but built from two bincounts so the bootstrap can afford tens of
+    thousands of evaluations.
+    """
+    total = np.bincount(y, minlength=num_classes)
+    correct = np.bincount(y[y == p], minlength=num_classes)
+    present = total > 0
+    return float((correct[present] / total[present]).mean())
+
+
+def paired_bootstrap_delta(y, p_a, p_b, n_boot, alpha, seed, num_classes=NUM_CLASSES):
+    """95% CI on bal_acc(a) - bal_acc(b) from ONE index resample per replicate.
+
+    The two arms are scored on identical test images, so their errors are
+    correlated and their marginal CIs are not independent. Overlapping
+    marginals therefore say nothing about whether the arms differ. Resampling
+    the images once per replicate and scoring both arms on that same resample
+    cancels the shared component, which is what makes the interval on the
+    difference a valid test: significant iff it excludes 0.
+    """
+    n = len(y)
+    point = fast_balanced_accuracy(y, p_a, num_classes) - fast_balanced_accuracy(
+        y, p_b, num_classes
+    )
+    rng = np.random.default_rng(seed)
+    stats = np.empty(n_boot)
+    for b in range(n_boot):
+        idx = rng.integers(0, n, n)
+        ys = y[idx]
+        stats[b] = fast_balanced_accuracy(ys, p_a[idx], num_classes) - \
+            fast_balanced_accuracy(ys, p_b[idx], num_classes)
+    lo, hi = np.quantile(stats, [alpha / 2.0, 1.0 - alpha / 2.0])
+    return point, float(lo), float(hi)
+
+
+def paired_bootstrap_delta_stratified(pc_a, pc_b, n_boot, alpha, seed,
+                                      num_classes=NUM_CLASSES):
+    """Paired CI on the difference in mean-over-centres balanced accuracy.
+
+    Mean-over-centres weights every centre equally, so the resample must too:
+    each centre is resampled within itself, both arms are scored per centre on
+    that centre's resample, the per-centre scores are averaged, and only then
+    differenced. Pooling the centres into one draw would let the largest silo
+    dominate a statistic defined to be size-blind.
+    """
+    cids = sorted(pc_a)
+    point = float(np.mean([fast_balanced_accuracy(*pc_a[c], num_classes) for c in cids]) -
+                  np.mean([fast_balanced_accuracy(*pc_b[c], num_classes) for c in cids]))
+    rng = np.random.default_rng(seed)
+    stats = np.empty(n_boot)
+    for b in range(n_boot):
+        va, vb = [], []
+        for c in cids:
+            y, p_a = pc_a[c]
+            _, p_b = pc_b[c]
+            idx = rng.integers(0, len(y), len(y))
+            ys = y[idx]
+            va.append(fast_balanced_accuracy(ys, p_a[idx], num_classes))
+            vb.append(fast_balanced_accuracy(ys, p_b[idx], num_classes))
+        stats[b] = np.mean(va) - np.mean(vb)
+    lo, hi = np.quantile(stats, [alpha / 2.0, 1.0 - alpha / 2.0])
+    return point, float(lo), float(hi)
 
 
 def agg_over_seeds(values):
@@ -286,6 +354,55 @@ def main():
     cols.append(("pooled", "pooled"))
     cols = [(k, lab) for k, lab in cols if k in scored]
 
+    # Paired deltas are computed before the headline table, because gap-closed
+    # needs to know whether its own denominator is distinguishable from zero.
+    pairs = []
+    if "pooled" in scored and "local" in scored:
+        pairs.append(("pooled", "local"))
+    for fa in sorted(fed_arms):
+        if "local" in scored:
+            pairs.append((fa, "local"))
+        if "pooled" in scored:
+            pairs.append((fa, "pooled"))
+
+    row_keys = [f"c{c}" for c in range(NUM_CLIENTS)] + ["union", "mean_centres"]
+    paired = {}
+    for a, b in pairs:
+        pc_a = scored[a][0][1]["_per_centre"]
+        pc_b = scored[b][0][1]["_per_centre"]
+        for cid in range(NUM_CLIENTS):
+            y_a, p_a = pc_a[cid]
+            y_b, p_b = pc_b[cid]
+            if not np.array_equal(y_a, y_b):
+                sys.exit(f"centre {cid}: {a} and {b} were scored on different "
+                         f"labels; pairing them would be invalid.")
+            paired[(a, b, f"c{cid}")] = paired_bootstrap_delta(
+                y_a, p_a, p_b, args.n_boot, args.alpha, args.boot_seed
+            )
+        Y_a, P_a = scored[a][0][1]["_pooled_preds"]
+        _, P_b = scored[b][0][1]["_pooled_preds"]
+        paired[(a, b, "union")] = paired_bootstrap_delta(
+            Y_a, P_a, P_b, args.n_boot, args.alpha, args.boot_seed
+        )
+        paired[(a, b, "mean_centres")] = paired_bootstrap_delta_stratified(
+            pc_a, pc_b, args.n_boot, args.alpha, args.boot_seed
+        )
+
+    def headroom_is_significant(row):
+        """Is pooled meaningfully above local at this row?
+
+        gap-closed divides by pooled - local. If that headroom is itself
+        indistinguishable from zero the quotient is noise over noise: a tiny
+        denominator swings it to +-hundreds of percent on a difference the data
+        cannot even establish. Report n/a instead of a number that will be read
+        as a result.
+        """
+        key = ("pooled", "local", row)
+        if key not in paired:
+            return False
+        d, lo, hi = paired[key]
+        return d > 0 and lo > 0
+
     def cell(arm, row):
         if arm not in scored:
             return None, None, None
@@ -298,6 +415,12 @@ def main():
     emit()
     emit("Balanced accuracy, final epoch/round. `[lo, hi]` = 95% bootstrap CI "
          "(shown when a single seed makes a std undefined).")
+    emit()
+    emit("These are **per-cell** uncertainties: each says how precisely that "
+         "one number is measured. They are **not** a way to compare two "
+         "columns - the arms share test images, so their intervals share noise "
+         "and overlap carries no verdict. Comparisons live in the paired "
+         "section below.")
     emit()
     emit("| row | test n | " + " | ".join(lab for _, lab in cols) + " | gap-closed |")
     emit("|" + "---|" * (len(cols) + 3))
@@ -314,7 +437,12 @@ def main():
         gc = gap_closed(byarm.get("local"),
                         byarm.get(best_fed) if best_fed else None,
                         byarm.get("pooled"))
-        cells.append("n/a" if gc is None else f"{gc:.1f}%")
+        if gc is None:
+            cells.append("n/a")
+        elif not headroom_is_significant(row):
+            cells.append(f"({gc:.1f}%) n.s.")
+        else:
+            cells.append(f"{gc:.1f}%")
         emit(f"| {label} | {n} | " + " | ".join(cells) + " |")
     emit()
 
@@ -326,7 +454,11 @@ def main():
              f"centralised training there, **negative** means it landed below "
              f"that centre's own local model. It is **n/a** wherever pooled did "
              f"not beat local, because the headroom it normalises by is then "
-             f"zero or negative and the ratio stops meaning anything.")
+             f"zero or negative and the ratio stops meaning anything. A value "
+             f"in parentheses marked **n.s.** is worse than n/a: pooled leads "
+             f"local numerically, but by an amount the paired test cannot "
+             f"distinguish from zero, so the quotient is noise divided by "
+             f"noise and its magnitude carries no information.")
         emit()
 
     if "local" in scored:
@@ -336,6 +468,42 @@ def main():
              f"routed union **{lu:.4f}**, mean over centres **{lm:.4f}**. The "
              f"union is size-weighted, so the largest silo dominates it; the "
              f"mean weights every centre equally.")
+        emit()
+
+    emit("## Paired comparisons")
+    emit()
+    if not pairs:
+        emit("Fewer than two arms present; nothing to compare.")
+        emit()
+    else:
+        emit("Every arm is scored on the **same** test images, so the marginal "
+             "CIs above share their noise and their overlap is not a test - two "
+             "arms can differ significantly with overlapping marginals, and can "
+             "fail to differ with disjoint ones. Each replicate below draws one "
+             "index resample and scores both arms on it, so the shared component "
+             "cancels. **A difference is significant iff its CI excludes 0.** "
+             "Mean-over-centres resamples within each centre so that every "
+             "centre keeps equal weight.")
+        emit()
+        if any(len(scored[a]) > 1 for a, _ in pairs):
+            emit("Where an arm has several seeds the first is used, since pairing "
+                 "requires one prediction vector per arm.")
+            emit()
+        labels = {**{f"c{c}": f"centre {c}" for c in range(NUM_CLIENTS)},
+                  "union": "**pooled union**", "mean_centres": "**mean over centres**"}
+        emit("| comparison | row | delta | 95% CI | significant |")
+        emit("|---|---|---|---|---|")
+        n_sig = 0
+        for a, b in pairs:
+            for row in row_keys:
+                d, lo, hi = paired[(a, b, row)]
+                sig = lo > 0 or hi < 0
+                n_sig += int(sig)
+                emit(f"| {a} - {b} | {labels[row]} | {d:+.4f} | "
+                     f"[{lo:+.4f}, {hi:+.4f}] | {'**yes**' if sig else 'no'} |")
+        emit()
+        emit(f"{n_sig} of {len(pairs) * len(row_keys)} comparisons are "
+             f"significant at the 95% level.")
         emit()
 
     rare, prev = rare_classes(silos, args.rare_prevalence)

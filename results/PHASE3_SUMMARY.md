@@ -103,3 +103,43 @@ breaks the size-monotone story, and it is tracked explicitly in Phase 4.
    Per-centre comparisons remain own-model-vs-fed.
 3. Probe absolute numbers are not the deliverable (SPEC §5); the ordering and
    sane per-class behaviour are. Both hold.
+
+---
+
+## Correction (added with Phase 6 paired testing)
+
+The "who benefits" section above compares arms by their point estimates and
+was written before paired significance testing existed in this project. Both
+arms are scored on the same test images, so the comparison needs a paired
+bootstrap; `scripts/aggregate_results.py` now produces one, and it does not
+support the section's headline reading.
+
+`fedavg − local`, probe arms, 95% paired CI:
+
+| centre | delta | 95% CI | significant |
+|---|---|---|---|
+| c0 | −0.0430 | [−0.0761, −0.0114] | **yes** |
+| c1 | +0.0987 | [−0.0176, +0.2366] | no |
+| c2 | −0.0595 | [−0.1344, +0.0039] | no |
+| c3 | −0.0565 | [−0.1327, +0.0174] | no |
+| c4 | −0.0994 | [−0.1877, −0.0131] | **yes** |
+| c5 | +0.3234 | [−0.0951, +0.4514] | no |
+| pooled union | −0.0876 | [−0.1147, −0.0599] | **yes** |
+| mean over centres | +0.0273 | [−0.0499, +0.0644] | no |
+
+This inverts the emphasis. The section leads with federation's **gains** for
+the small silos — c5 +0.32, c1 +0.10 — and neither is significant; c5's
+interval spans 0 on 88 test images. What the data does establish is the
+**losses**: c0, c4, and the union, all significant.
+
+The claims that survive: c5 has the largest point estimate and remains the
+most plausible beneficiary; c4 does break the size-monotone story, and that is
+now the better-supported of the two observations rather than the footnote.
+
+The claim that does not: "c5 gains +0.32 from federation" is not established
+by this data and should not be quoted as a result.
+
+Phase 3's stated purpose (SPEC §5) was ordering and sane per-class behaviour,
+not absolute numbers, and that purpose is unaffected. See
+`results/PHASE4_SUMMARY.md` for the same correction applied to the finetune
+arms.

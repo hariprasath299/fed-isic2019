@@ -13,6 +13,8 @@ Recomputed from saved weights on cuda; 1000 bootstrap resamples, 95% percentile 
 
 Balanced accuracy, final epoch/round. `[lo, hi]` = 95% bootstrap CI (shown when a single seed makes a std undefined).
 
+These are **per-cell** uncertainties: each says how precisely that one number is measured. They are **not** a way to compare two columns - the arms share test images, so their intervals share noise and overlap carries no verdict. Comparisons live in the paired section below.
+
 | row | test n | local (routed) | pooled | gap-closed |
 |---|---|---|---|---|
 | centre 0 | 2483 | 0.7823 [0.748, 0.811] | 0.7857 [0.752, 0.817] | n/a |
@@ -25,6 +27,23 @@ Balanced accuracy, final epoch/round. `[lo, hi]` = 95% bootstrap CI (shown when 
 | **mean over centres** | 4650 | 0.6637 | 0.7102 | n/a |
 
 Local is reported in both aggregations per the Phase 3 policy: routed union **0.7646**, mean over centres **0.6637**. The union is size-weighted, so the largest silo dominates it; the mean weights every centre equally.
+
+## Paired comparisons
+
+Every arm is scored on the **same** test images, so the marginal CIs above share their noise and their overlap is not a test - two arms can differ significantly with overlapping marginals, and can fail to differ with disjoint ones. Each replicate below draws one index resample and scores both arms on it, so the shared component cancels. **A difference is significant iff its CI excludes 0.** Mean-over-centres resamples within each centre so that every centre keeps equal weight.
+
+| comparison | row | delta | 95% CI | significant |
+|---|---|---|---|---|
+| pooled - local | centre 0 | +0.0035 | [-0.0276, +0.0374] | no |
+| pooled - local | centre 1 | -0.0429 | [-0.1589, +0.0839] | no |
+| pooled - local | centre 2 | -0.0043 | [-0.0559, +0.0438] | no |
+| pooled - local | centre 3 | +0.0312 | [-0.0468, +0.1066] | no |
+| pooled - local | centre 4 | +0.0132 | [-0.0557, +0.0820] | no |
+| pooled - local | centre 5 | +0.2780 | [-0.1201, +0.4292] | no |
+| pooled - local | **pooled union** | +0.0065 | [-0.0201, +0.0304] | no |
+| pooled - local | **mean over centres** | +0.0464 | [-0.0288, +0.0866] | no |
+
+0 of 8 comparisons are significant at the 95% level.
 
 ## Rare-class recall (< 2% of pooled train)
 
