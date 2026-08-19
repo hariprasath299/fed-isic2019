@@ -220,12 +220,26 @@ def run_local(args, silos, device, paths):
 
     for c in clients:
         final_path = paths["final"].replace("_final.pt", f"_c{c.id}_final.pt")
-        if args.resume and os.path.exists(final_path):
-            print(f"[local c{c.id}] final checkpoint exists, skipping")
-            continue
+        ckpt_path = paths["ckpt"].replace(".pt", f"_c{c.id}.pt")
         model = make_model(args).to(device)
         opt = None
-        for ep in range(1, args.epochs + 1):
+        start_epoch = 0
+        if args.resume and os.path.exists(ckpt_path):
+            ck = load_checkpoint(ckpt_path)
+            model.load_state_dict(ck["model"])
+            start_epoch = ck["epoch"]
+            print(f"[local c{c.id}] resumed at epoch {start_epoch}")
+        elif args.resume and os.path.exists(final_path):
+            # A finished run from before per-epoch checkpointing existed: its
+            # epoch count is not recoverable from the file, so never silently
+            # retrain over it. scripts/migrate_local_ckpt.py promotes such a
+            # run to a resumable checkpoint using its config's epoch count.
+            print(f"[local c{c.id}] final checkpoint exists with no epoch record, skipping")
+            continue
+        if start_epoch >= args.epochs:
+            print(f"[local c{c.id}] already trained to epoch {start_epoch}, skipping")
+            continue
+        for ep in range(start_epoch + 1, args.epochs + 1):
             opt = local_train(
                 model, c.train_loader, c.loss_fn, steps=len(c.train_loader), lr=args.lr,
                 device=device, optimizer=args.optimizer, opt=opt, use_amp=use_amp,
@@ -239,6 +253,7 @@ def run_local(args, silos, device, paths):
                             "seed": args.seed, "client": c.id, "round": ep,
                             "bal_acc_own": own})
                 print(f"[local c{c.id} ep {ep:03d}] own bal_acc {own:.4f}")
+                save_checkpoint({"epoch": ep, "model": model.state_dict()}, ckpt_path)
         # cross-silo row: how this silo's model does everywhere (generalisation gap)
         metrics = evaluate_clients(model, clients, device)
         xeval_logger.log({"arm": "local_xeval", "mode": args.mode, "strategy": "-",
