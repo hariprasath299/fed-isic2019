@@ -438,3 +438,67 @@ def test_headline_and_paired_use_the_same_estimator():
     delta = seed_mean_paired_delta(a_seeds, b_seeds, n_boot=50, alpha=0.05, seed=0)
     for row in row_keys_for(a_seeds[0]):
         assert delta[row][0] == pytest.approx(ma[row][0] - mb[row][0], abs=1e-12)
+
+
+# ------------------------------- strata ------------------------------------- #
+
+def test_singleton_stratum_reproduces_its_per_centre_row():
+    """Per-centre rows and strata must come from one statistic, so a stratum of
+    one centre has to equal that centre's row exactly -- not approximately."""
+    from scripts.aggregate_results import (
+        _identity_draw,
+        score_rows_on_draw,
+        subset_balanced_accuracy,
+    )
+
+    rng = np.random.default_rng(23)
+    pc = {}
+    for c in range(3):
+        y = rng.integers(0, 8, 80)
+        pc[c] = (y, np.where(rng.random(80) < 0.7, y, rng.integers(0, 8, 80)))
+
+    idx = _identity_draw(pc)
+    rows = score_rows_on_draw([pc], idx)
+    for c in pc:
+        assert subset_balanced_accuracy(pc, idx, (c,), 8) == rows[f"c{c}"]
+
+
+def test_all_centre_stratum_reproduces_the_union_row():
+    """The union is the all-centre subset. If these ever diverge, the union is
+    being computed by a second code path that can drift."""
+    from scripts.aggregate_results import (
+        _identity_draw,
+        score_rows_on_draw,
+        subset_balanced_accuracy,
+    )
+
+    rng = np.random.default_rng(29)
+    pc = {}
+    for c in range(4):
+        y = rng.integers(0, 8, 60)
+        pc[c] = (y, np.where(rng.random(60) < 0.65, y, rng.integers(0, 8, 60)))
+
+    idx = _identity_draw(pc)
+    rows = score_rows_on_draw([pc], idx)
+    assert subset_balanced_accuracy(pc, idx, tuple(sorted(pc)), 8) == rows["union"]
+
+
+def test_strata_appear_only_when_their_centres_exist():
+    """A six-centre run gets small/mid/large; a small fixture must not fabricate
+    strata out of centres it does not have."""
+    from scripts.aggregate_results import STRATA, row_keys_for, strata_for
+
+    full = {c: (np.zeros(2, dtype=np.int64), np.zeros(2, dtype=np.int64)) for c in range(6)}
+    assert set(strata_for(full)) == set(STRATA)
+    assert all(n in row_keys_for(full) for n in STRATA)
+
+    # centres 0-2: large (c0,c1) is complete, mid (c2,c3) and small (c4,c5) are not
+    partial = {c: (np.zeros(2, dtype=np.int64), np.zeros(2, dtype=np.int64)) for c in range(3)}
+    assert set(strata_for(partial)) == {"large"}
+    assert "large" in row_keys_for(partial)
+    assert not any(n in row_keys_for(partial) for n in ("mid", "small"))
+
+    # a single centre completes no stratum
+    lone = {2: (np.zeros(2, dtype=np.int64), np.zeros(2, dtype=np.int64))}
+    assert strata_for(lone) == {}
+    assert not any(n in row_keys_for(lone) for n in STRATA)

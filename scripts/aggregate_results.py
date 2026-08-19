@@ -233,13 +233,42 @@ def paired_bootstrap_delta_stratified(pc_a, pc_b, n_boot, alpha, seed,
 ROW_KEYS = [f"c{c}" for c in range(NUM_CLIENTS)] + ["union", "mean_centres"]
 
 
+# Size strata, fixed in the 2026-08-19 pre-registration by training-set size.
+# small = c4+c5 (655+351), mid = c2+c3 (2691+1807), large = c0+c1 (9930+3163).
+STRATA = {"small": (4, 5), "mid": (2, 3), "large": (0, 1)}
+
+
+def subset_balanced_accuracy(pc, idx, centres, num_classes=NUM_CLASSES):
+    """Balanced accuracy over the pooled test images of a set of centres.
+
+    One statistic serves every row that is a set of centres: a per-centre row
+    is the singleton subset, the union row is the all-centre subset, and each
+    stratum is the subset naming it. Defining them separately would let them
+    drift apart; defining them here makes the identities exact by construction
+    (asserted in the tests).
+    """
+    ys, ps = [], []
+    for c in centres:
+        y, p = pc[c]
+        i = idx[c]
+        ys.append(y[i])
+        ps.append(p[i])
+    return fast_balanced_accuracy(np.concatenate(ys), np.concatenate(ps), num_classes)
+
+
+def strata_for(pc):
+    """Strata whose centres are all present in this data."""
+    return {k: v for k, v in STRATA.items() if all(c in pc for c in v)}
+
+
 def row_keys_for(pc):
     """Row labels implied by the data, rather than assumed from NUM_CLIENTS.
 
     Keeps the estimator independent of this project's six-centre shape, so it
     can be tested on small fixtures and reused on a different split.
     """
-    return [f"c{c}" for c in sorted(pc)] + ["union", "mean_centres"]
+    return ([f"c{c}" for c in sorted(pc)] + list(strata_for(pc))
+            + ["union", "mean_centres"])
 
 
 def _stratified_draw(pc, rng):
@@ -263,16 +292,12 @@ def score_rows_on_draw(pc_seeds, idx, num_classes=NUM_CLASSES):
     cids = sorted(idx)
     per_seed = []
     for pc in pc_seeds:
-        vals, ys, ps = {}, [], []
+        vals = {}
         for c in cids:
-            y, p = pc[c]
-            i = idx[c]
-            ys.append(y[i])
-            ps.append(p[i])
-            vals[f"c{c}"] = fast_balanced_accuracy(y[i], p[i], num_classes)
-        vals["union"] = fast_balanced_accuracy(
-            np.concatenate(ys), np.concatenate(ps), num_classes
-        )
+            vals[f"c{c}"] = subset_balanced_accuracy(pc, idx, (c,), num_classes)
+        for name, centres in strata_for(pc).items():
+            vals[name] = subset_balanced_accuracy(pc, idx, centres, num_classes)
+        vals["union"] = subset_balanced_accuracy(pc, idx, tuple(cids), num_classes)
         vals["mean_centres"] = float(np.mean([vals[f"c{c}"] for c in cids]))
         per_seed.append(vals)
     return {k: float(np.mean([v[k] for v in per_seed])) for k in per_seed[0]}
@@ -493,7 +518,8 @@ def main():
         if "pooled" in scored:
             pairs.append((fa, "pooled"))
 
-    row_keys = ROW_KEYS
+    row_keys = row_keys_for(pc_seeds[sorted(pc_seeds)[0]][0])
+    strata = strata_for(pc_seeds[sorted(pc_seeds)[0]][0])
     paired = {}
     for a, b in pairs:
         res = seed_mean_paired_delta(
@@ -554,6 +580,8 @@ def main():
     emit("|" + "---|" * (len(cols) + 3))
 
     rows = [(f"c{c}", f"centre {c}", test_n[c]) for c in range(NUM_CLIENTS)]
+    rows += [(name, f"**stratum: {name}** (c" + ", c".join(str(c) for c in centres) + ")",
+              sum(test_n[c] for c in centres)) for name, centres in strata.items()]
     rows += [("union", "**pooled union**", sum(test_n.values())),
              ("mean_centres", "**mean over centres**", sum(test_n.values()))]
     for row, label, n in rows:
@@ -573,6 +601,16 @@ def main():
             cells.append(f"{gc:.1f}%")
         emit(f"| {label} | {n} | " + " | ".join(cells) + " |")
     emit()
+
+    if strata:
+        emit("**Stratum rows** are the pre-registered primary endpoints "
+             "(2026-08-19), fixed by training-set size before any federated "
+             "number existed. A stratum is scored over its centres' pooled test "
+             "images - the same centre-subset statistic that produces the "
+             "per-centre rows (singleton subset) and the union row (all "
+             "centres), so the three agree by construction. Pooling is what buys "
+             "test-set power: 252 images for `small` against 88 for c5 alone.")
+        emit()
 
     if best_fed:
         emit(f"gap-closed = (fed - local) / (pooled - local), using **{best_fed}**. "
@@ -620,6 +658,7 @@ def main():
              "between unrelated runs.")
         emit()
         labels = {**{f"c{c}": f"centre {c}" for c in range(NUM_CLIENTS)},
+                  **{n: f"**stratum: {n}**" for n in strata},
                   "union": "**pooled union**", "mean_centres": "**mean over centres**"}
         emit("| comparison | row | delta | 95% CI | significant |")
         emit("|---|---|---|---|---|")
@@ -650,7 +689,7 @@ def main():
         emit("|---|---|---|---|")
         for a, b in pairs:
             common = sorted(set(seed_ids[a]) & set(seed_ids[b]))
-            for row in ("union", "mean_centres"):
+            for row in list(strata) + ["mean_centres", "union"]:
                 if not common:
                     emit(f"| {a} - {b} | {labels[row]} | no shared seeds | -- |")
                     continue

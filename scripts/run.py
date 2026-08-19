@@ -63,6 +63,7 @@ from fedisic.losses import (  # noqa: E402
 from fedisic.models import LinearProbe, build_finetune_model  # noqa: E402
 from fedisic.utils import (  # noqa: E402
     CsvLogger,
+    autocast_dtype,
     load_checkpoint,
     resolve_device,
     save_checkpoint,
@@ -368,8 +369,13 @@ def main():
         "per_class": os.path.join(args.out, f"{name}_per_class.csv"),
         "config": os.path.join(args.out, f"{name}_config.json"),
     }
+    # amp_dtype is a protocol parameter, not an implementation detail: fp16
+    # overflows EfficientNet-B0 and NaNs the run, so which dtype was actually
+    # used has to travel with the results.
+    amp_dtype = str(autocast_dtype()) if (args.amp and device.startswith("cuda")) else None
     with open(paths["config"], "w") as f:
-        json.dump({**vars(args), "device": device}, f, indent=2)
+        json.dump({**vars(args), "device": device, "amp_dtype": amp_dtype}, f, indent=2)
+    print(f"amp dtype: {amp_dtype or 'off (fp32)'}")
 
     print(f"run: {name} | device: {device}")
     silos = build_silos(args)

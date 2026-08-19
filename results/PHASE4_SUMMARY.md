@@ -7,6 +7,61 @@ federated arm is deferred, so Phase 4 is not formally complete.
 All numbers here are recomputed from the saved `*_final.pt` weights by
 `scripts/aggregate_results.py`; the full report is `AGGREGATE_finetune.md`.
 
+## Protocol parameter: AMP dtype is bf16, not fp16
+
+**`--amp` means bfloat16 everywhere in this project.** It is a named protocol
+parameter, recorded in every run's `*_config.json` as `amp_dtype`, and it
+belongs in the methods section alongside batch size and learning rate. It is
+not an implementation detail.
+
+### Why: the float16 overflow
+
+The first three finetune runs — `pooled_lrsweep_{1e4,5e4,1e3}`, 2026-08-19
+05:42–07:02 — were void. Every weight in all three checkpoints was NaN
+(4,059,812 of 4,059,812 elements).
+
+Bisecting a forward pass on a real batch: the input was clean, the float32
+forward was clean, and the **float16 autocast forward went NaN inside
+`features[6]`** of EfficientNet-B0. Activations already reach absmax ~300 by
+`features[3]`, overflow float16's range to `inf`, and `inf − inf` makes the
+logits NaN on the *first* forward pass — before any weight update. The runs
+never trained for a single step; they were not diverging from a bad LR.
+
+bfloat16 has float32's exponent range and cannot overflow this way. Measured on
+the GTX 1650: bf16 1.26 s/step at 2.48 GB against fp32's 2.15 s/step at
+4.86 GB, so it is both correct and faster here. float16 remains the fallback
+only for cards without bf16 support, where it must be paired with a GradScaler.
+
+The A100 runbook asserts `torch.cuda.is_bf16_supported()` before the session
+starts, because the fallback would silently reintroduce the failure.
+
+### The archived trio
+
+`results/_nan_amp_bug/` holds all three void runs — CSVs, configs, per-class
+files — with a README recording why they are void. They were moved, never
+deleted: SPEC §8 forbids overwriting a run, and `CsvLogger` appends, so leaving
+them in place would have mixed fresh rows into NaN ones.
+
+### Detection lesson, now enforced in code
+
+The failure was invisible for three hours because `argmax` over an all-NaN
+logit vector returns index 0. Predicting one class scores exactly
+1/(classes present) per centre — a plausible-looking bad-hyperparameter result
+rather than a crash.
+
+**Identical metrics across differing hyperparameters is presumed corruption,
+not a finding.** Three learning rates spanning 10× produced byte-identical
+balanced accuracy at every epoch; no real optimisation behaves that way.
+
+`local_train` now raises on a non-finite loss, so this class of failure stops
+at the first bad step instead of writing hours of chance-level CSV to disk.
+The check is at train time, where it is cheap, rather than left to be noticed
+in analysis.
+
+Runs s0, s1 and s2 all postdate the fix and are unaffected: every checkpoint
+audited at 0 NaN / 0 inf, all 8 classes predicted, bf16 memory footprint
+confirmed.
+
 ## Headline
 
 | row | test n | local (routed) | pooled |

@@ -33,8 +33,13 @@ These are **per-cell** uncertainties: each says how precisely that one number is
 | centre 3 | 452 | 0.6253 +/- 0.0242 [0.564, 0.683] | 0.6187 +/- 0.0293 [0.565, 0.669] | n/a |
 | centre 4 | 164 | 0.6636 +/- 0.0300 [0.592, 0.735] | 0.6837 +/- 0.0202 [0.622, 0.742] | n/a |
 | centre 5 | 88 | 0.4551 +/- 0.0244 [0.350, 0.766] | 0.7541 +/- 0.0053 [0.529, 0.903] | n/a |
+| **stratum: small** (c4, c5) | 252 | 0.5284 +/- 0.0230 [0.486, 0.751] | 0.7812 +/- 0.0109 [0.669, 0.819] | n/a |
+| **stratum: mid** (c2, c3) | 1124 | 0.7094 +/- 0.0264 [0.672, 0.748] | 0.6914 +/- 0.0144 [0.655, 0.727] | n/a |
+| **stratum: large** (c0, c1) | 3274 | 0.7928 +/- 0.0098 [0.767, 0.817] | 0.7977 +/- 0.0023 [0.773, 0.822] | n/a |
 | **pooled union** | 4650 | 0.7662 +/- 0.0024 [0.745, 0.788] | 0.7658 +/- 0.0074 [0.746, 0.785] | n/a |
 | **mean over centres** | 4650 | 0.6577 +/- 0.0085 [0.633, 0.728] | 0.7120 +/- 0.0026 [0.669, 0.748] | n/a |
+
+**Stratum rows** are the pre-registered primary endpoints (2026-08-19), fixed by training-set size before any federated number existed. A stratum is scored over its centres' pooled test images - the same centre-subset statistic that produces the per-centre rows (singleton subset) and the union row (all centres), so the three agree by construction. Pooling is what buys test-set power: 252 images for `small` against 88 for c5 alone.
 
 Local is reported in both aggregations per the Phase 3 policy: routed union **0.7662**, mean over centres **0.6577**. The union is size-weighted, so the largest silo dominates it; the mean weights every centre equally.
 
@@ -52,10 +57,13 @@ The estimator is the **difference of seed-means**: each replicate draws one stra
 | pooled - local | centre 3 | -0.0066 | [-0.0608, +0.0480] | no |
 | pooled - local | centre 4 | +0.0201 | [-0.0461, +0.0816] | no |
 | pooled - local | centre 5 | +0.2990 | [-0.0707, +0.4442] | no |
+| pooled - local | **stratum: small** | +0.2528 | [-0.0420, +0.2883] | no |
+| pooled - local | **stratum: mid** | -0.0180 | [-0.0563, +0.0168] | no |
+| pooled - local | **stratum: large** | +0.0050 | [-0.0177, +0.0262] | no |
 | pooled - local | **pooled union** | -0.0004 | [-0.0193, +0.0175] | no |
 | pooled - local | **mean over centres** | +0.0543 | [-0.0208, +0.0829] | no |
 
-0 of 8 comparisons are significant at the 95% level.
+0 of 11 comparisons are significant at the 95% level.
 
 ### Per-seed deltas (robustness, reported separately)
 
@@ -63,8 +71,11 @@ Deltas computed seed by seed on the real test set, no resampling. Sign consisten
 
 | comparison | row | per-seed deltas | sign-consistent |
 |---|---|---|---|
-| pooled - local | **pooled union** | s0 +0.0065, s1 -0.0073 | no - seeds disagree in sign |
+| pooled - local | **stratum: small** | s0 +0.2443, s1 +0.2614 | **yes** |
+| pooled - local | **stratum: mid** | s0 +0.0108, s1 -0.0469 | no - seeds disagree in sign |
+| pooled - local | **stratum: large** | s0 -0.0004, s1 +0.0103 | no - seeds disagree in sign |
 | pooled - local | **mean over centres** | s0 +0.0464, s1 +0.0622 | **yes** |
+| pooled - local | **pooled union** | s0 +0.0065, s1 -0.0073 | no - seeds disagree in sign |
 
 ## Rare-class recall (< 2% of pooled train)
 
