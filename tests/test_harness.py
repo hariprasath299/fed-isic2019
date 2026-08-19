@@ -346,3 +346,95 @@ def test_resume_without_optimizer_state_falls_back_cleanly():
     model = nn.Linear(4, 3)
     assert restore_optimizer("adam", 1e-3, model, {"epoch": 20,
                                                    "model": model.state_dict()}) is None
+
+
+# ------------------- seed aggregation for paired endpoints ------------------ #
+
+def _fake_arm(rng, n_per_centre=(60, 40), n_classes=8, n_seeds=1, skill=0.7):
+    """One per-centre prediction dict per seed, sharing y across seeds/arms."""
+    ys = [rng.integers(0, n_classes, n) for n in n_per_centre]
+    seeds = []
+    for _ in range(n_seeds):
+        pc = {}
+        for c, y in enumerate(ys):
+            p = np.where(rng.random(len(y)) < skill, y, rng.integers(0, n_classes, len(y)))
+            pc[c] = (y, p)
+        seeds.append(pc)
+    return seeds, ys
+
+
+def test_seed_mean_delta_with_one_seed_reduces_to_single_seed_paired_delta():
+    """The amendment must not move the single-seed answer. With one seed and
+    one centre the seed-mean estimator is the old paired delta, so it has to
+    reproduce it exactly, not merely closely."""
+    from scripts.aggregate_results import paired_bootstrap_delta, seed_mean_paired_delta
+
+    rng = np.random.default_rng(7)
+    y = rng.integers(0, 8, 150)
+    p_a = np.where(rng.random(150) < 0.75, y, rng.integers(0, 8, 150))
+    p_b = np.where(rng.random(150) < 0.60, y, rng.integers(0, 8, 150))
+
+    old = paired_bootstrap_delta(y, p_a, p_b, n_boot=200, alpha=0.05, seed=3)
+    new = seed_mean_paired_delta([{0: (y, p_a)}], [{0: (y, p_b)}],
+                                 n_boot=200, alpha=0.05, seed=3)["c0"]
+    assert new == pytest.approx(old, abs=0.0)
+
+
+def test_seed_mean_delta_handles_unequal_seed_counts():
+    """D1 pairs a 1-seed fed arm against 2-3 seed pooled/local arms. That must
+    run, use every seed, and not silently fall back to one of them."""
+    from scripts.aggregate_results import row_keys_for, seed_mean_paired_delta
+
+    rng = np.random.default_rng(11)
+    a_seeds, ys = _fake_arm(rng, n_seeds=3, skill=0.75)
+    b_seeds = []
+    for _ in range(1):
+        b_seeds.append({c: (y, np.where(rng.random(len(y)) < 0.55, y,
+                                        rng.integers(0, 8, len(y))))
+                        for c, y in enumerate(ys)})
+
+    out = seed_mean_paired_delta(a_seeds, b_seeds, n_boot=100, alpha=0.05, seed=0)
+    rows = row_keys_for(a_seeds[0])
+    assert set(out) == set(rows)
+    for row in rows:
+        d, lo, hi = out[row]
+        assert lo <= hi
+        assert np.isfinite([d, lo, hi]).all()
+
+    # every seed is used: dropping one changes the answer
+    fewer = seed_mean_paired_delta(a_seeds[:2], b_seeds, n_boot=100, alpha=0.05, seed=0)
+    assert fewer["union"][0] != pytest.approx(out["union"][0], abs=1e-12)
+
+
+def test_shared_resample_makes_self_comparison_exactly_zero():
+    """Sharing the draw is what cancels the common noise. An arm compared with
+    itself must give exactly [0, 0] on every row, at any seed count -- if the
+    draw were not shared this would be nonzero."""
+    from scripts.aggregate_results import row_keys_for, seed_mean_paired_delta
+
+    rng = np.random.default_rng(13)
+    a_seeds, _ = _fake_arm(rng, n_seeds=3)
+    out = seed_mean_paired_delta(a_seeds, a_seeds, n_boot=100, alpha=0.05, seed=0)
+    for row in row_keys_for(a_seeds[0]):
+        assert out[row] == (0.0, 0.0, 0.0)
+
+
+def test_headline_and_paired_use_the_same_estimator():
+    """The headline seed-mean and the paired point estimate must agree by
+    construction: delta = seed-mean(A) - seed-mean(B), same code path."""
+    from scripts.aggregate_results import (
+        row_keys_for,
+        seed_mean_bootstrap,
+        seed_mean_paired_delta,
+    )
+
+    rng = np.random.default_rng(17)
+    a_seeds, ys = _fake_arm(rng, n_seeds=2, skill=0.8)
+    b_seeds = [{c: (y, np.where(rng.random(len(y)) < 0.5, y, rng.integers(0, 8, len(y))))
+                for c, y in enumerate(ys)}]
+
+    ma = seed_mean_bootstrap(a_seeds, n_boot=50, alpha=0.05, seed=0)
+    mb = seed_mean_bootstrap(b_seeds, n_boot=50, alpha=0.05, seed=0)
+    delta = seed_mean_paired_delta(a_seeds, b_seeds, n_boot=50, alpha=0.05, seed=0)
+    for row in row_keys_for(a_seeds[0]):
+        assert delta[row][0] == pytest.approx(ma[row][0] - mb[row][0], abs=1e-12)

@@ -25,14 +25,14 @@ These are **per-cell** uncertainties: each says how precisely that one number is
 
 | row | test n | local (routed) | pooled | gap-closed |
 |---|---|---|---|---|
-| centre 0 | 2483 | 0.7736 +/- 0.0122 [0.748, 0.811] | 0.7846 +/- 0.0017 [0.752, 0.817] | n/a |
-| centre 1 | 791 | 0.7366 +/- 0.0148 [0.679, 0.797] | 0.6884 +/- 0.0223 [0.588, 0.853] | n/a |
-| centre 2 | 672 | 0.6922 +/- 0.0063 [0.643, 0.838] | 0.7428 +/- 0.0840 [0.633, 0.839] | n/a |
-| centre 3 | 452 | 0.6253 +/- 0.0242 [0.546, 0.669] | 0.6187 +/- 0.0293 [0.575, 0.703] | n/a |
-| centre 4 | 164 | 0.6636 +/- 0.0300 [0.611, 0.757] | 0.6837 +/- 0.0202 [0.626, 0.768] | n/a |
-| centre 5 | 88 | 0.4551 +/- 0.0244 [0.358, 0.802] | 0.7541 +/- 0.0053 [0.484, 0.904] | n/a |
-| **pooled union** | 4650 | 0.7662 +/- 0.0024 [0.740, 0.788] | 0.7658 +/- 0.0074 [0.745, 0.792] | n/a |
-| **mean over centres** | 4650 | 0.6577 +/- 0.0085 | 0.7120 +/- 0.0026 | n/a |
+| centre 0 | 2483 | 0.7736 +/- 0.0122 [0.747, 0.801] | 0.7846 +/- 0.0017 [0.757, 0.811] | n/a |
+| centre 1 | 791 | 0.7366 +/- 0.0148 [0.667, 0.786] | 0.6884 +/- 0.0223 [0.602, 0.792] | n/a |
+| centre 2 | 672 | 0.6922 +/- 0.0063 [0.650, 0.843] | 0.7428 +/- 0.0840 [0.698, 0.820] | n/a |
+| centre 3 | 452 | 0.6253 +/- 0.0242 [0.564, 0.683] | 0.6187 +/- 0.0293 [0.565, 0.669] | n/a |
+| centre 4 | 164 | 0.6636 +/- 0.0300 [0.592, 0.735] | 0.6837 +/- 0.0202 [0.622, 0.742] | n/a |
+| centre 5 | 88 | 0.4551 +/- 0.0244 [0.350, 0.766] | 0.7541 +/- 0.0053 [0.529, 0.903] | n/a |
+| **pooled union** | 4650 | 0.7662 +/- 0.0024 [0.745, 0.788] | 0.7658 +/- 0.0074 [0.746, 0.785] | n/a |
+| **mean over centres** | 4650 | 0.6577 +/- 0.0085 [0.633, 0.728] | 0.7120 +/- 0.0026 [0.669, 0.748] | n/a |
 
 Local is reported in both aggregations per the Phase 3 policy: routed union **0.7662**, mean over centres **0.6577**. The union is size-weighted, so the largest silo dominates it; the mean weights every centre equally.
 
@@ -40,20 +40,29 @@ Local is reported in both aggregations per the Phase 3 policy: routed union **0.
 
 Every arm is scored on the **same** test images, so the marginal CIs above share their noise and their overlap is not a test - two arms can differ significantly with overlapping marginals, and can fail to differ with disjoint ones. Each replicate below draws one index resample and scores both arms on it, so the shared component cancels. **A difference is significant iff its CI excludes 0.** Mean-over-centres resamples within each centre so that every centre keeps equal weight.
 
-Where an arm has several seeds the first is used, since pairing requires one prediction vector per arm.
+The estimator is the **difference of seed-means**: each replicate draws one stratified resample, scores every available seed of both arms on it, and differences the seed-means. Seed counts need not match - no seed is discarded and no pairing is invented between unrelated runs.
 
 | comparison | row | delta | 95% CI | significant |
 |---|---|---|---|---|
-| pooled - local | centre 0 | +0.0035 | [-0.0276, +0.0374] | no |
-| pooled - local | centre 1 | -0.0429 | [-0.1589, +0.0839] | no |
-| pooled - local | centre 2 | -0.0043 | [-0.0559, +0.0438] | no |
-| pooled - local | centre 3 | +0.0312 | [-0.0468, +0.1066] | no |
-| pooled - local | centre 4 | +0.0132 | [-0.0557, +0.0820] | no |
-| pooled - local | centre 5 | +0.2780 | [-0.1201, +0.4292] | no |
-| pooled - local | **pooled union** | +0.0065 | [-0.0201, +0.0304] | no |
-| pooled - local | **mean over centres** | +0.0464 | [-0.0288, +0.0866] | no |
+| pooled - local | centre 0 | +0.0109 | [-0.0146, +0.0336] | no |
+| pooled - local | centre 1 | -0.0482 | [-0.1348, +0.0372] | no |
+| pooled - local | centre 2 | +0.0506 | [-0.0522, +0.0780] | no |
+| pooled - local | centre 3 | -0.0066 | [-0.0608, +0.0480] | no |
+| pooled - local | centre 4 | +0.0201 | [-0.0461, +0.0816] | no |
+| pooled - local | centre 5 | +0.2990 | [-0.0707, +0.4442] | no |
+| pooled - local | **pooled union** | -0.0004 | [-0.0193, +0.0175] | no |
+| pooled - local | **mean over centres** | +0.0543 | [-0.0208, +0.0829] | no |
 
 0 of 8 comparisons are significant at the 95% level.
+
+### Per-seed deltas (robustness, reported separately)
+
+Deltas computed seed by seed on the real test set, no resampling. Sign consistency asks whether every seed agrees with the direction of the seed-mean delta; it is a descriptor, not a second test, and is only meaningful once both arms have at least two seeds.
+
+| comparison | row | per-seed deltas | sign-consistent |
+|---|---|---|---|
+| pooled - local | **pooled union** | s0 +0.0065, s1 -0.0073 | no - seeds disagree in sign |
+| pooled - local | **mean over centres** | s0 +0.0464, s1 +0.0622 | **yes** |
 
 ## Rare-class recall (< 2% of pooled train)
 

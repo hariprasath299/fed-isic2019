@@ -4,8 +4,8 @@ Reads every run's config, reloads its saved *_final.pt weights, recomputes
 predictions on the test silos, and emits:
 
   1. the headline table: rows = centres 0-5, pooled union, mean-over-centres;
-     columns = local, fedavg, best fed variant, pooled -- mean +/- std over
-     seeds, with a 95% percentile-bootstrap CI per cell;
+     columns = local, fedavg, best fed variant, pooled -- reported as
+     mean +/- seed std [CI of the seed-mean];
   2. gap-closed %: how much of the pooled-minus-local headroom federation
      recovers, per centre;
   3. rare-class recall (classes under --rare-prevalence of pooled train) per
@@ -230,6 +230,111 @@ def paired_bootstrap_delta_stratified(pc_a, pc_b, n_boot, alpha, seed,
     return point, float(lo), float(hi)
 
 
+ROW_KEYS = [f"c{c}" for c in range(NUM_CLIENTS)] + ["union", "mean_centres"]
+
+
+def row_keys_for(pc):
+    """Row labels implied by the data, rather than assumed from NUM_CLIENTS.
+
+    Keeps the estimator independent of this project's six-centre shape, so it
+    can be tested on small fixtures and reused on a different split.
+    """
+    return [f"c{c}" for c in sorted(pc)] + ["union", "mean_centres"]
+
+
+def _stratified_draw(pc, rng):
+    """One stratified test-index resample: drawn independently within each
+    centre, so every centre keeps its own size in the replicate."""
+    return {c: rng.integers(0, len(pc[c][0]), len(pc[c][0])) for c in sorted(pc)}
+
+
+def _identity_draw(pc):
+    return {c: np.arange(len(pc[c][0])) for c in sorted(pc)}
+
+
+def score_rows_on_draw(pc_seeds, idx, num_classes=NUM_CLASSES):
+    """Every row's balanced accuracy on one fixed resample, averaged over seeds.
+
+    `pc_seeds` is one per-centre prediction dict per seed. All seeds are scored
+    on the *same* draw, which is what lets an arm with three seeds and an arm
+    with one be compared without discarding anything or inventing a pairing
+    between unrelated runs.
+    """
+    cids = sorted(idx)
+    per_seed = []
+    for pc in pc_seeds:
+        vals, ys, ps = {}, [], []
+        for c in cids:
+            y, p = pc[c]
+            i = idx[c]
+            ys.append(y[i])
+            ps.append(p[i])
+            vals[f"c{c}"] = fast_balanced_accuracy(y[i], p[i], num_classes)
+        vals["union"] = fast_balanced_accuracy(
+            np.concatenate(ys), np.concatenate(ps), num_classes
+        )
+        vals["mean_centres"] = float(np.mean([vals[f"c{c}"] for c in cids]))
+        per_seed.append(vals)
+    return {k: float(np.mean([v[k] for v in per_seed])) for k in per_seed[0]}
+
+
+def seed_mean_bootstrap(pc_seeds, n_boot, alpha, seed, num_classes=NUM_CLASSES):
+    """row -> (seed-mean, lo, hi): CI of the seed-mean under the shared draw.
+
+    The point estimate is the mean over seeds of the metric on the real test
+    set; the interval is the percentile spread of that same seed-mean across
+    resamples. One estimator, so the headline cell and the paired endpoint
+    below it mean the same thing.
+    """
+    rows = row_keys_for(pc_seeds[0])
+    point = score_rows_on_draw(pc_seeds, _identity_draw(pc_seeds[0]), num_classes)
+    rng = np.random.default_rng(seed)
+    stats = {k: np.empty(n_boot) for k in rows}
+    for b in range(n_boot):
+        vals = score_rows_on_draw(pc_seeds, _stratified_draw(pc_seeds[0], rng), num_classes)
+        for k in rows:
+            stats[k][b] = vals[k]
+    out = {}
+    for k in rows:
+        lo, hi = np.quantile(stats[k], [alpha / 2.0, 1.0 - alpha / 2.0])
+        out[k] = (point[k], float(lo), float(hi))
+    return out
+
+
+def seed_mean_paired_delta(pc_a_seeds, pc_b_seeds, n_boot, alpha, seed,
+                           num_classes=NUM_CLASSES):
+    """row -> (delta, lo, hi) for mean-over-seeds(A) - mean-over-seeds(B).
+
+    Each replicate draws ONE stratified resample and scores every seed of both
+    arms on it. Sharing the draw cancels the test-sampling noise the arms have
+    in common — they are evaluated on identical images — which is what makes
+    the interval a test rather than a description. Seed counts need not match:
+    each arm contributes the mean of whatever seeds it has.
+    """
+    rows = row_keys_for(pc_a_seeds[0])
+    ident = _identity_draw(pc_a_seeds[0])
+    pa = score_rows_on_draw(pc_a_seeds, ident, num_classes)
+    pb = score_rows_on_draw(pc_b_seeds, ident, num_classes)
+    rng = np.random.default_rng(seed)
+    stats = {k: np.empty(n_boot) for k in rows}
+    for b in range(n_boot):
+        idx = _stratified_draw(pc_a_seeds[0], rng)
+        va = score_rows_on_draw(pc_a_seeds, idx, num_classes)
+        vb = score_rows_on_draw(pc_b_seeds, idx, num_classes)
+        for k in rows:
+            stats[k][b] = va[k] - vb[k]
+    out = {}
+    for k in rows:
+        lo, hi = np.quantile(stats[k], [alpha / 2.0, 1.0 - alpha / 2.0])
+        out[k] = (pa[k] - pb[k], float(lo), float(hi))
+    return out
+
+
+def per_seed_row_values(pc_seeds, num_classes=NUM_CLASSES):
+    """Each seed's own row values on the real test set (no resampling)."""
+    return [score_rows_on_draw([pc], _identity_draw(pc), num_classes) for pc in pc_seeds]
+
+
 def agg_over_seeds(values):
     """mean +/- std over seeds. One seed is reported as itself, never +/- 0.000."""
     v = np.array(values, dtype=float)
@@ -362,8 +467,23 @@ def main():
     cols.append(("pooled", "pooled"))
     cols = [(k, lab) for k, lab in cols if k in scored]
 
-    # Paired deltas are computed before the headline table, because gap-closed
-    # needs to know whether its own denominator is distinguishable from zero.
+    # One estimator drives the whole report: seed-mean under a shared
+    # stratified resample. Paired deltas come first because gap-closed needs to
+    # know whether its own denominator is distinguishable from zero.
+    pc_seeds = {a: [s["_per_centre"] for _, s in runs_a] for a, runs_a in scored.items()}
+    seed_ids = {a: [cfg["seed"] for cfg, _ in runs_a] for a, runs_a in scored.items()}
+    for a, pcs in pc_seeds.items():
+        for cid in range(NUM_CLIENTS):
+            ref = pc_seeds[sorted(pc_seeds)[0]][0][cid][0]
+            for pc in pcs:
+                if not np.array_equal(pc[cid][0], ref):
+                    sys.exit(f"centre {cid}: arm {a} was scored on different "
+                             f"labels; pairing would be invalid.")
+
+    marginal = {a: seed_mean_bootstrap(pcs, args.n_boot, args.alpha, args.boot_seed)
+                for a, pcs in pc_seeds.items()}
+    per_seed = {a: per_seed_row_values(pcs) for a, pcs in pc_seeds.items()}
+
     pairs = []
     if "pooled" in scored and "local" in scored:
         pairs.append(("pooled", "local"))
@@ -373,28 +493,14 @@ def main():
         if "pooled" in scored:
             pairs.append((fa, "pooled"))
 
-    row_keys = [f"c{c}" for c in range(NUM_CLIENTS)] + ["union", "mean_centres"]
+    row_keys = ROW_KEYS
     paired = {}
     for a, b in pairs:
-        pc_a = scored[a][0][1]["_per_centre"]
-        pc_b = scored[b][0][1]["_per_centre"]
-        for cid in range(NUM_CLIENTS):
-            y_a, p_a = pc_a[cid]
-            y_b, p_b = pc_b[cid]
-            if not np.array_equal(y_a, y_b):
-                sys.exit(f"centre {cid}: {a} and {b} were scored on different "
-                         f"labels; pairing them would be invalid.")
-            paired[(a, b, f"c{cid}")] = paired_bootstrap_delta(
-                y_a, p_a, p_b, args.n_boot, args.alpha, args.boot_seed
-            )
-        Y_a, P_a = scored[a][0][1]["_pooled_preds"]
-        _, P_b = scored[b][0][1]["_pooled_preds"]
-        paired[(a, b, "union")] = paired_bootstrap_delta(
-            Y_a, P_a, P_b, args.n_boot, args.alpha, args.boot_seed
+        res = seed_mean_paired_delta(
+            pc_seeds[a], pc_seeds[b], args.n_boot, args.alpha, args.boot_seed
         )
-        paired[(a, b, "mean_centres")] = paired_bootstrap_delta_stratified(
-            pc_a, pc_b, args.n_boot, args.alpha, args.boot_seed
-        )
+        for row, val in res.items():
+            paired[(a, b, row)] = val
 
     def headroom_is_significant(row):
         """Is pooled meaningfully above local at this row?
@@ -412,16 +518,12 @@ def main():
         return d > 0 and lo > 0
 
     def cell(arm, row):
+        """mean +/- seed-std [CI of the seed-mean], all from one estimator."""
         if arm not in scored:
             return None, None, None
-        vals = [s[row][0] for _, s in scored[arm]]
-        mean, std, n = agg_over_seeds(vals)
-        # The CI always comes from the first seed's predictions. Averaging
-        # bootstrap intervals across seeds would blend two different
-        # uncertainties into one number that measures neither, so the interval
-        # stays attached to a single run and is labelled as such.
-        ci = scored[arm][0][1][row][1:]
-        return mean, std, ci
+        point, lo, hi = marginal[arm][row]
+        _, std, _ = agg_over_seeds([v[row] for v in per_seed[arm]])
+        return point, std, (lo, hi)
 
     emit("## Headline table")
     emit()
@@ -505,10 +607,12 @@ def main():
              "Mean-over-centres resamples within each centre so that every "
              "centre keeps equal weight.")
         emit()
-        if any(len(scored[a]) > 1 for a, _ in pairs):
-            emit("Where an arm has several seeds the first is used, since pairing "
-                 "requires one prediction vector per arm.")
-            emit()
+        emit("The estimator is the **difference of seed-means**: each replicate "
+             "draws one stratified resample, scores every available seed of "
+             "both arms on it, and differences the seed-means. Seed counts need "
+             "not match - no seed is discarded and no pairing is invented "
+             "between unrelated runs.")
+        emit()
         labels = {**{f"c{c}": f"centre {c}" for c in range(NUM_CLIENTS)},
                   "union": "**pooled union**", "mean_centres": "**mean over centres**"}
         emit("| comparison | row | delta | 95% CI | significant |")
@@ -525,6 +629,48 @@ def main():
         emit(f"{n_sig} of {len(pairs) * len(row_keys)} comparisons are "
              f"significant at the 95% level.")
         emit()
+
+        # Reported alongside the CI, never folded into it: the per-seed deltas
+        # and their sign agreement describe robustness across reruns, which is
+        # a different question from whether the seed-mean differs.
+        emit("### Per-seed deltas (robustness, reported separately)")
+        emit()
+        emit("Deltas computed seed by seed on the real test set, no resampling. "
+             "Sign consistency asks whether every seed agrees with the direction "
+             "of the seed-mean delta; it is a descriptor, not a second test, and "
+             "is only meaningful once both arms have at least two seeds.")
+        emit()
+        emit("| comparison | row | per-seed deltas | sign-consistent |")
+        emit("|---|---|---|---|")
+        for a, b in pairs:
+            common = sorted(set(seed_ids[a]) & set(seed_ids[b]))
+            for row in ("union", "mean_centres"):
+                if not common:
+                    emit(f"| {a} - {b} | {labels[row]} | no shared seeds | -- |")
+                    continue
+                ds = []
+                for sd in common:
+                    va = per_seed[a][seed_ids[a].index(sd)][row]
+                    vb = per_seed[b][seed_ids[b].index(sd)][row]
+                    ds.append(va - vb)
+                shown = ", ".join(f"s{sd} {d:+.4f}" for sd, d in zip(common, ds))
+                if len(common) < 2 or min(len(set(seed_ids[a])), len(set(seed_ids[b]))) < 2:
+                    verdict = "n/a (needs 2+ seeds per arm)"
+                else:
+                    ref = paired[(a, b, row)][0]
+                    verdict = ("**yes**" if all(d * ref > 0 for d in ds)
+                               else "no - seeds disagree in sign")
+                emit(f"| {a} - {b} | {labels[row]} | {shown} | {verdict} |")
+        emit()
+
+        provisional = [a for a, _ in pairs if len(seed_ids[a]) == 1]
+        provisional += [b for _, b in pairs if len(seed_ids[b]) == 1]
+        if provisional:
+            emit(f"**Provisional.** Arm(s) {', '.join(sorted(set(provisional)))} "
+                 f"have a single seed. Their run-to-run variance is unmeasured, "
+                 f"so any finding involving them is provisional regardless of "
+                 f"how narrow its CI is.")
+            emit()
 
     rare, prev = rare_classes(silos, args.rare_prevalence)
     emit(f"## Rare-class recall (< {args.rare_prevalence:.0%} of pooled train)")

@@ -229,3 +229,80 @@ seed, and protocol. Their epoch-5 values agree to every digit recorded:
 **0.690992** in both. Same-seed runs are reproducing bit-for-bit on this
 machine, which means the seed-variance analysis for s1/s2 will measure real
 run-to-run variation from the seed, not incidental nondeterminism on top of it.
+
+---
+
+# Pre-registration amendment — seed aggregation for paired endpoints (2026-08-20)
+
+Amends the 2026-08-19 pre-registration. Written before the D1 session starts
+and before any federated finetune number exists. **This freezes the analysis:
+after this, the only thing that changes before D1 is seed 2 finishing.**
+
+## Why an amendment was needed
+
+The original pre-registration fixed the paired estimator but not how it
+combines seeds. When seed 1 landed, the report was averaging seeds in the
+headline while the paired section silently used the first seed only — half the
+data discarded, and two different meanings for the same arm on one page. D1
+makes it worse: one fed seed against two or three pooled/local seeds.
+
+## Estimator (primary endpoints)
+
+**Difference of seed-means under a shared-resample paired bootstrap.**
+
+Per replicate:
+
+1. draw **one** stratified test-index resample — independently within each
+   centre, so every centre keeps its own size;
+2. score **every available seed of both arms** on that same draw;
+3. delta = `mean-over-seeds(A) − mean-over-seeds(B)`;
+4. CI = percentile over replicates. Significant iff it excludes 0.
+
+Sharing the draw cancels the test-sampling noise the arms have in common, since
+they are evaluated on identical images — that is what makes the interval a test
+rather than a description. Unequal seed counts are handled natively: each arm
+contributes the mean of whatever seeds it has. No seed is discarded and no
+pairing is invented between unrelated runs.
+
+Headline cells use the identical path: `mean ± seed-std [CI of the seed-mean]`.
+The same number means the same thing everywhere in the report.
+
+One definitional consequence, recorded: the union row is now resampled
+**stratified by centre** rather than as one undifferentiated pool, because all
+rows share a single draw. This preserves each centre's proportion in every
+replicate.
+
+## Reported alongside, never merged into the CI
+
+- **per-arm seed std** of the metric;
+- **per-seed deltas**, listed individually;
+- **sign consistency** across seeds — a robustness descriptor, not a second
+  test, and only meaningful once both arms have ≥ 2 seeds;
+- any finding involving a **single-seed arm is labelled provisional**
+  regardless of how narrow its CI is. At D1 the fed arm will have one seed, so
+  every fed finding is provisional by this rule.
+
+## What it changes in the current two-seed table
+
+| row | pooled − local (seed-mean) | 95% CI | per-seed | sign-consistent |
+|---|---|---|---|---|
+| pooled union | **−0.0004** | [−0.0193, +0.0175] | s0 +0.0065, s1 −0.0073 | **no** |
+| mean over centres | +0.0543 | [−0.0208, +0.0829] | s0 +0.0464, s1 +0.0622 | yes |
+
+The union delta **changes sign between seeds** and the seed-mean is −0.0004 —
+pooled and local are not merely indistinguishable there, they swap order on a
+rerun. Still 0 of 8 comparisons significant. The mean-over-centres delta is
+sign-consistent and the larger effect, but its CI includes 0 too.
+
+This is precisely the robustness question the CI cannot answer, which is why
+sign consistency is reported next to it rather than folded into it.
+
+## Tests pinning the amendment (23/23)
+
+- a single-seed seed-mean delta reproduces the previous single-seed paired
+  delta **exactly**, so the amendment does not move the existing answer;
+- unequal seed counts run, and dropping a seed changes the result — proof every
+  seed is used rather than one being silently preferred;
+- an arm compared against itself returns exactly `[0, 0]` on every row at any
+  seed count, which only holds because the draw is shared;
+- the headline seed-mean and the paired point estimate agree by construction.
