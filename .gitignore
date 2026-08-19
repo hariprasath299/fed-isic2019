@@ -16,3 +16,6 @@ results/*.pt
 
 # run logs
 logs/
+
+# aggregate prediction cache: regenerated from checkpoints on demand
+results/_cache/

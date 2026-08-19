@@ -206,3 +206,40 @@ def test_inverse_frequency_alpha_handles_absent_classes():
     a = inverse_frequency_alpha([10, 0, 30], 3)
     assert a[1] == 0.0
     assert a[0] > a[2] > 0.0
+
+
+# --------------------------- aggregate reporting ---------------------------- #
+
+def test_gap_closed_is_na_when_pooled_does_not_beat_local():
+    """The metric normalises by pooled-minus-local. When that headroom is zero
+    or negative the ratio flips sign or explodes, so it must refuse to answer
+    rather than print a number that reads like a result."""
+    from scripts.aggregate_results import gap_closed
+
+    assert gap_closed(local=0.60, fed=0.65, pooled=0.70) == pytest.approx(50.0)
+    assert gap_closed(local=0.70, fed=0.65, pooled=0.60) is None  # local beats pooled
+    assert gap_closed(local=0.70, fed=0.72, pooled=0.70) is None  # zero headroom
+    assert gap_closed(local=None, fed=0.65, pooled=0.70) is None  # arm absent
+
+
+def test_gap_closed_reports_out_of_range_values():
+    """Above 100% (federation beat centralised) and negative (worse than the
+    centre's own model) are real findings, not errors to be clamped away."""
+    from scripts.aggregate_results import gap_closed
+
+    assert gap_closed(local=0.50, fed=0.80, pooled=0.70) == pytest.approx(150.0)
+    assert gap_closed(local=0.50, fed=0.40, pooled=0.70) == pytest.approx(-50.0)
+
+
+def test_agg_over_seeds_never_fakes_a_std_for_one_seed():
+    """A single seed has no std. Printing +/- 0.000 would claim a precision the
+    run cannot support."""
+    from scripts.aggregate_results import agg_over_seeds
+
+    mean, std, n = agg_over_seeds([0.75])
+    assert (mean, std, n) == (pytest.approx(0.75), None, 1)
+
+    mean, std, n = agg_over_seeds([0.70, 0.80])
+    assert mean == pytest.approx(0.75)
+    assert std == pytest.approx(0.0707, abs=1e-4)  # ddof=1, not the population std
+    assert n == 2
