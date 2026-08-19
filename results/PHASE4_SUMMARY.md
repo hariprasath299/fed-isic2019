@@ -118,8 +118,9 @@ curve's own noise, or it keeps recommending epochs that buy nothing.
 - **Resume discontinuity.** Neither arm saves optimizer state, so Adam's
   moments reset once at epoch 20 for both arms equally. The 40-epoch curves
   are not identical to one continuous 40-epoch run.
-- **LR at the grid edge.** 1e-4 won a sweep of {1e-4, 5e-4, 1e-3} and is the
-  smallest value tried, so the optimum may lie below the searched range.
+- ~~**LR at the grid edge.**~~ Retired 2026-08-19: a 3e-5 point was added and
+  scored 0.6165, bracketing 1e-4 as an interior maximum. See the LR decision
+  log below.
 
 ---
 
@@ -194,3 +195,37 @@ that 20 more epochs showed was worth +0.0021.
 Any FLamby comparison number is quoted from their paper at the point of use,
 with the reference. This repo's README contains none. Nothing is quoted from
 memory.
+
+## LR decision log (2026-08-19, 22:41)
+
+The winner of the original {1e-4, 5e-4, 1e-3} grid sat at the grid's edge, so
+a fourth point was run below it. Protocol identical to the other three: pooled
+finetune, 5 epochs, eval every epoch, seed 0, batch 64, Adam, focal gamma 2.0
+with pooled alphas, bf16 AMP.
+
+| LR | bal_acc_pooled @ ep 5 |
+|---|---|
+| 3e-5 | 0.616538 |
+| **1e-4** | **0.690992** |
+| 5e-4 | 0.670196 |
+| 1e-3 | 0.646804 |
+
+**Branch taken: clear loss.** 3e-5 scored 0.6165 against 1e-4's 0.6910, a
+margin of **−0.0745**, well below the −0.0100 clear-loss threshold. No
+tie-break at 15 epochs was needed. **LR is locked at 1e-4.**
+
+### The grid-edge caveat is retired
+
+1e-4 is no longer the smallest value tried, and the four points bracket it:
+0.6165 < **0.6910** > 0.6702 > 0.6469. It is an interior maximum of the
+searched range, not an endpoint, so the concern that the optimum might lie
+below the grid is resolved rather than merely noted. The corresponding entry
+under "Standing caveats" no longer applies.
+
+### Unplanned reproducibility check
+
+`pooled_lrsweep_1e4` and `pooled_finetune_s0` are independent runs sharing LR,
+seed, and protocol. Their epoch-5 values agree to every digit recorded:
+**0.690992** in both. Same-seed runs are reproducing bit-for-bit on this
+machine, which means the seed-variance analysis for s1/s2 will measure real
+run-to-run variation from the seed, not incidental nondeterminism on top of it.
