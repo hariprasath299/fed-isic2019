@@ -35,13 +35,34 @@ runtime rather than proceeding on the wrong accelerator.
 
 ## Cell 2 — clone at the frozen commit
 
+The repo is private, so the clone needs a token. Use `getpass` — never paste a
+PAT into a notebook cell, because Colab saves cell text and a committed or
+shared notebook then leaks it.
+
+```python
+from getpass import getpass
+
+GH_USER = "hariprasath299"
+GH_REPO = "fed-isic2019"
+GH_TOKEN = getpass("GitHub PAT (repo scope, not echoed): ")
+
+import subprocess
+url = f"https://{GH_USER}:{GH_TOKEN}@github.com/{GH_USER}/{GH_REPO}.git"
+subprocess.run(["git", "clone", url, "/content/skin-care"], check=True)
+del GH_TOKEN, url  # keep the token out of later cell output and history
+```
+
 ```bash
-%cd /content
-!git clone <REMOTE_URL> skin-care
 %cd /content/skin-care
+!git remote set-url origin https://github.com/hariprasath299/fed-isic2019.git
 !git checkout d7235ea
 !git log --oneline -1
 ```
+
+The `set-url` strips the token back out of `.git/config`, so a later `!git
+remote -v` or an exported notebook cannot expose it. Expect the checkout to
+report a detached HEAD at `d7235ea` — that is the frozen analysis commit and
+is deliberate.
 
 Everything lives on `/content` (local SSD), never a mounted Drive — SPEC §8.
 Drive-backed I/O will dominate the run time on an image workload.
