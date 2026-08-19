@@ -77,8 +77,18 @@ the finetune arms at the union level.** The honest alternatives:
   need no denominator and are already produced;
 - use mean-over-centres, where the headroom is larger (+0.0464) though still
   not significant — check its paired CI before quoting a ratio;
-- widen the local-to-pooled gap by adding seeds, which shrinks the CI on the
-  headroom without changing the point estimates.
+- pool centres into size strata, which is what actually buys test-set power:
+  a stratum statistic is computed over more test images than any single small
+  centre, so its paired CI is narrower.
+
+Adding seeds does **not** help here, and the two uncertainties must not be
+conflated. A bootstrap CI measures **test-set sampling** — how much the number
+would move on a different draw of test images. Seeds measure **run-to-run
+variance** — how much it would move on a different initialisation,
+augmentation draw, and client order. Extra seeds stabilise the point estimate
+and let a std be quoted; they leave the test set, and therefore the
+test-sampling interval, exactly as it was. Both are needed, and neither
+substitutes for the other.
 
 ## Convergence
 
@@ -110,3 +120,77 @@ curve's own noise, or it keeps recommending epochs that buy nothing.
   are not identical to one continuous 40-epoch run.
 - **LR at the grid edge.** 1e-4 won a sweep of {1e-4, 5e-4, 1e-3} and is the
   smallest value tried, so the optimum may lie below the searched range.
+
+---
+
+# Addendum — pre-registration for the federated arm (2026-08-19)
+
+Written **before any federated finetune number exists**, so the analysis
+cannot be shaped by the result. Anything not fixed here is exploratory and
+must be labelled as such in the writeup.
+
+## Primary endpoints
+
+Paired bootstrap deltas, 95% CI, significance = CI excludes 0:
+
+- `fed − local`
+- `fed − pooled`
+
+evaluated at:
+
+1. **mean over centres** — every centre weighted equally, stratified
+   resampling within centre;
+2. **per size stratum**, strata fixed now by training-set size:
+
+| stratum | centres | train n | test n |
+|---|---|---|---|
+| small | c4, c5 | 655 + 351 = 1006 | 164 + 88 = **252** |
+| mid | c2, c3 | 2691 + 1807 = 4498 | 672 + 452 = **1124** |
+| large | c0, c1 | 9930 + 3163 = 13093 | 2483 + 791 = **3274** |
+
+The stratum statistic is balanced accuracy over the stratum's **pooled test
+images**, with the paired bootstrap **resampling within centre**. Pooling the
+images is what buys the power — 252 images for the small stratum instead of 88
+for c5 alone — while resampling within centre keeps each centre's contribution
+to the resample proportional to its own test set rather than letting one
+centre's draw stand in for the stratum.
+
+Per-centre deltas remain reported, as secondary and descriptive. c5 alone
+(88 images) will not support a primary claim.
+
+## Hypotheses on record
+
+- **H1**: `fed − local > 0` in the **small** stratum. Federation should help
+  the centres that cannot train a good model alone. c5 has the largest point
+  estimate in every arm measured so far, and c4 holds only 3 of 8 classes, so
+  it can only gain classes it has never seen.
+- **H2**: `fed − local ≤ 0` in the **large** stratum. A large silo already has
+  enough data, and averaging drags it toward centres with different
+  distributions. The probe arms support this: `fedavg − local` at c0 was
+  significantly negative (−0.0430, CI [−0.0761, −0.0114]).
+
+A result contradicting either is reportable as such. These are recorded to
+prevent the direction being chosen after seeing the numbers.
+
+## gap-closed
+
+**Descriptive only. Never a primary claim.** Quoted only where the paired
+`pooled − local` CI at that row excludes 0, since it divides by that headroom.
+In the current finetune arms it does not (union delta +0.0065, CI
+[−0.0201, +0.0304]), so gap-closed is expected to be unreportable at the union
+level. `aggregate_results.py` enforces this: such cells print `(x%) n.s.`
+
+## Protocol held fixed
+
+LR = the locked sweep winner; batch 64; Adam; focal loss gamma 2.0, alpha from
+pooled counts; 50 rounds x 100 local steps; eval every round; seed 0 first,
+then 1 and 2. Extension past 50 rounds only via `--resume`, and only if the
+curve is still climbing by a window sized against its own noise — the ep-20
+lesson above, where a 5-epoch slope inside sd 0.0505 scatter read as a trend
+that 20 more epochs showed was worth +0.0021.
+
+## Numbers from external sources
+
+Any FLamby comparison number is quoted from their paper at the point of use,
+with the reference. This repo's README contains none. Nothing is quoted from
+memory.

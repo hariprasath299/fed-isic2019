@@ -308,3 +308,41 @@ def test_paired_ci_is_narrower_than_unpaired_on_correlated_predictions():
         )
     ulo, uhi = np.quantile(diffs, [0.025, 0.975])
     assert paired_width < (uhi - ulo)
+
+
+# --------------------------- resume fidelity -------------------------------- #
+
+def test_resume_restores_adam_moments():
+    """Adam carries first/second moment estimates. Dropping them on resume
+    restarts the optimizer mid-run and puts a transient in the curve, so a
+    resumed run must reload them rather than rebuild a fresh optimizer."""
+    from scripts.run import restore_optimizer
+
+    torch.manual_seed(0)
+    model = nn.Linear(4, 3)
+    opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+    for _ in range(5):
+        opt.zero_grad()
+        model(torch.randn(8, 4)).sum().backward()
+        opt.step()
+    ck = {"epoch": 5, "model": model.state_dict(), "opt": opt.state_dict()}
+
+    restored = restore_optimizer("adam", 1e-3, model, ck)
+    assert restored is not None
+    for p_orig, p_new in zip(opt.param_groups[0]["params"],
+                             restored.param_groups[0]["params"]):
+        a = opt.state[p_orig]
+        b = restored.state[p_new]
+        assert a["step"] == b["step"]
+        assert torch.allclose(a["exp_avg"], b["exp_avg"])
+        assert torch.allclose(a["exp_avg_sq"], b["exp_avg_sq"])
+
+
+def test_resume_without_optimizer_state_falls_back_cleanly():
+    """Checkpoints written before optimizer state was saved must still resume,
+    with fresh moments, exactly as they did before."""
+    from scripts.run import restore_optimizer
+
+    model = nn.Linear(4, 3)
+    assert restore_optimizer("adam", 1e-3, model, {"epoch": 20,
+                                                   "model": model.state_dict()}) is None

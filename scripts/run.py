@@ -11,7 +11,8 @@ Modes:
 
 Every run writes {out}/{run_name}.csv (one row per eval), {out}/{run_name}.pt
 (atomic resume checkpoint), {out}/{run_name}_final.pt, and a per-class recall
-CSV at the end. --resume continues an interrupted pooled or fed run.
+CSV at the end. --resume continues an interrupted run in any arm, restoring
+optimizer state along with the weights.
 
 Examples:
   python scripts/run.py --arm pooled --mode probe --epochs 20
@@ -52,6 +53,7 @@ from fedisic.fed.strategies import (  # noqa: E402
     FEDOPT_STRATEGIES,
     ServerOptimizer,
     local_train,
+    make_optimizer,
 )
 from fedisic.losses import (  # noqa: E402
     FLAMBY_ALPHA,
@@ -174,6 +176,31 @@ def write_per_class_recall(model, clients, device, path):
     print(f"per-class recall (pooled test): {[f'{r:.3f}' for r in rec]} -> {path}")
 
 
+def restore_optimizer(optimizer_name, lr, model, ck):
+    """Rebuild the client optimizer and reload its state from a checkpoint.
+
+    Adam carries first and second moment estimates. Dropping them on resume
+    makes the first steps after the resume behave like the start of training,
+    a visible transient, so a resumed run is not the same trajectory as a
+    continuous one. Restoring them removes that discontinuity.
+
+    Returns None when the checkpoint predates optimizer-state saving, in which
+    case the caller starts fresh moments exactly as before.
+    """
+    state = ck.get("opt")
+    if state is None:
+        return None
+    params = [p for p in model.parameters() if p.requires_grad]
+    opt = make_optimizer(optimizer_name, params, lr)
+    opt.load_state_dict(state)
+    return opt
+
+
+def _resume_note(opt):
+    return "" if opt is not None else \
+        " (checkpoint carries no optimizer state; Adam moments restart)"
+
+
 # -------------------------------- arms -------------------------------------- #
 
 def run_pooled(args, silos, device, paths):
@@ -193,7 +220,8 @@ def run_pooled(args, silos, device, paths):
         ck = load_checkpoint(paths["ckpt"])
         model.load_state_dict(ck["model"])
         start_epoch = ck["epoch"]
-        print(f"Resumed pooled run at epoch {start_epoch}")
+        opt = restore_optimizer(args.optimizer, args.lr, model, ck)
+        print(f"Resumed pooled run at epoch {start_epoch}" + _resume_note(opt))
 
     use_amp = args.amp and device.startswith("cuda")
     for ep in range(start_epoch + 1, args.epochs + 1):
@@ -205,7 +233,10 @@ def run_pooled(args, silos, device, paths):
             metrics = evaluate_clients(model, clients, device)
             logger.log({"arm": "pooled", "mode": args.mode, "strategy": "-",
                         "seed": args.seed, "round": ep, **metrics})
-            save_checkpoint({"epoch": ep, "model": model.state_dict()}, paths["ckpt"])
+            save_checkpoint(
+                {"epoch": ep, "model": model.state_dict(), "opt": opt.state_dict()},
+                paths["ckpt"],
+            )
             print(f"[pooled ep {ep:03d}] " + _fmt(metrics))
 
     save_checkpoint({"model": model.state_dict()}, paths["final"])
@@ -228,7 +259,8 @@ def run_local(args, silos, device, paths):
             ck = load_checkpoint(ckpt_path)
             model.load_state_dict(ck["model"])
             start_epoch = ck["epoch"]
-            print(f"[local c{c.id}] resumed at epoch {start_epoch}")
+            opt = restore_optimizer(args.optimizer, args.lr, model, ck)
+            print(f"[local c{c.id}] resumed at epoch {start_epoch}" + _resume_note(opt))
         elif args.resume and os.path.exists(final_path):
             # A finished run from before per-epoch checkpointing existed: its
             # epoch count is not recoverable from the file, so never silently
@@ -253,7 +285,10 @@ def run_local(args, silos, device, paths):
                             "seed": args.seed, "client": c.id, "round": ep,
                             "bal_acc_own": own})
                 print(f"[local c{c.id} ep {ep:03d}] own bal_acc {own:.4f}")
-                save_checkpoint({"epoch": ep, "model": model.state_dict()}, ckpt_path)
+                save_checkpoint(
+                    {"epoch": ep, "model": model.state_dict(), "opt": opt.state_dict()},
+                    ckpt_path,
+                )
         # cross-silo row: how this silo's model does everywhere (generalisation gap)
         metrics = evaluate_clients(model, clients, device)
         xeval_logger.log({"arm": "local_xeval", "mode": args.mode, "strategy": "-",
