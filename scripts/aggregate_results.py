@@ -538,6 +538,12 @@ def main():
          "cell can be stable across reruns yet poorly measured because its "
          "centre has few test images, or the reverse.")
     emit()
+    emit("Union-row CIs are **conditional on the test set's centre "
+         "composition**: since the 2026-08-20 amendment every row shares one "
+         "draw resampled *within* centre, so the union holds each centre's "
+         "proportion fixed instead of resampling it. Small differences against "
+         "pre-amendment AGGREGATE files are that scheme change, not new data.")
+    emit()
     emit("These are **per-cell** uncertainties: each says how precisely that "
          "one number is measured. They are **not** a way to compare two "
          "columns - the arms share test images, so their intervals share noise "

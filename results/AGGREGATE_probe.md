@@ -16,6 +16,8 @@ Balanced accuracy, final epoch/round, as `mean +/- seed std [bootstrap CI]`.
 
 The two uncertainties measure different things and neither bounds the other. The **std** is run-to-run variation across seeds (initialisation, augmentation draw, client order) and is absent with one seed. The **CI** is test-set sampling, computed from the first seed's predictions - a different draw of test images, same run. A cell can be stable across reruns yet poorly measured because its centre has few test images, or the reverse.
 
+Union-row CIs are **conditional on the test set's centre composition**: since the 2026-08-20 amendment every row shares one draw resampled *within* centre, so the union holds each centre's proportion fixed instead of resampling it. Small differences against pre-amendment AGGREGATE files are that scheme change, not new data.
+
 These are **per-cell** uncertainties: each says how precisely that one number is measured. They are **not** a way to compare two columns - the arms share test images, so their intervals share noise and overlap carries no verdict. Comparisons live in the paired section below.
 
 | row | test n | local (routed) | fedavg | pooled | gap-closed |
