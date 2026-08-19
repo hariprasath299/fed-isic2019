@@ -239,6 +239,14 @@ def agg_over_seeds(values):
 
 
 def fmt_cell(mean, std, ci=None):
+    """value +/- seed std [bootstrap CI].
+
+    Both uncertainties are shown whenever both exist, because they measure
+    different things and neither bounds the other: the std is run-to-run
+    variation across seeds, the CI is test-set sampling at one seed. A cell
+    can have a tiny std and a wide CI (stable across reruns, measured on few
+    images) or the reverse.
+    """
     if mean is None or (isinstance(mean, float) and np.isnan(mean)):
         return "--"
     s = f"{mean:.4f}"
@@ -408,13 +416,25 @@ def main():
             return None, None, None
         vals = [s[row][0] for _, s in scored[arm]]
         mean, std, n = agg_over_seeds(vals)
-        ci = scored[arm][0][1][row][1:] if n == 1 else None
+        # The CI always comes from the first seed's predictions. Averaging
+        # bootstrap intervals across seeds would blend two different
+        # uncertainties into one number that measures neither, so the interval
+        # stays attached to a single run and is labelled as such.
+        ci = scored[arm][0][1][row][1:]
         return mean, std, ci
 
     emit("## Headline table")
     emit()
-    emit("Balanced accuracy, final epoch/round. `[lo, hi]` = 95% bootstrap CI "
-         "(shown when a single seed makes a std undefined).")
+    emit("Balanced accuracy, final epoch/round, as "
+         "`mean +/- seed std [bootstrap CI]`.")
+    emit()
+    emit("The two uncertainties measure different things and neither bounds "
+         "the other. The **std** is run-to-run variation across seeds "
+         "(initialisation, augmentation draw, client order) and is absent with "
+         "one seed. The **CI** is test-set sampling, computed from the first "
+         "seed's predictions - a different draw of test images, same run. A "
+         "cell can be stable across reruns yet poorly measured because its "
+         "centre has few test images, or the reverse.")
     emit()
     emit("These are **per-cell** uncertainties: each says how precisely that "
          "one number is measured. They are **not** a way to compare two "
