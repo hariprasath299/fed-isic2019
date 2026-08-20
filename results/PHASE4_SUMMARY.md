@@ -361,3 +361,119 @@ sign consistency is reported next to it rather than folded into it.
 - an arm compared against itself returns exactly `[0, 0]` on every row at any
   seed count, which only holds because the draw is shared;
 - the headline seed-mean and the paired point estimate agree by construction.
+
+---
+
+# Three-seed results and pre-D1 verification (2026-08-20)
+
+Arms A+B complete at seeds 0, 1, 2. No federated run exists yet.
+
+## Per-seed union values, recomputed from saved predictions
+
+| seed | pooled union | local routed-union | delta |
+|---|---|---|---|
+| s0 | 0.7711 | 0.7646 | **+0.0065** |
+| s1 | 0.7606 | 0.7679 | **−0.0073** |
+| s2 | 0.7891 | 0.7935 | **−0.0044** |
+| seed-mean | 0.7736 | 0.7753 | **−0.0017** |
+
+**Correction:** an earlier −0.0004 for this delta was the *two-seed* value
+(s0, s1 only). With all three seeds it is **−0.0017**, CI [−0.0179, +0.0144].
+The delta of seed-means equals the mean of per-seed deltas by linearity; both
+give −0.0017.
+
+The delta changes sign across seeds: positive at s0, negative at s1 and s2.
+
+## Seed variance against the effect
+
+| metric | s0 | s1 | s2 | mean | sd |
+|---|---|---|---|---|---|
+| pooled union | 0.7711 | 0.7606 | 0.7891 | 0.7736 | 0.0144 |
+| local mean-over-centres | 0.6637 | 0.6518 | 0.6941 | 0.6699 | 0.0218 |
+
+The pooled union seed sd is **0.0144**; the pooled−local union delta is
+**−0.0017**. The contrast the comparison rests on is smaller than the spread
+produced by rerunning the same arm with a different seed.
+
+## Is s0 an outlier? No — and z-scores cannot answer this
+
+**A z-score test is not valid at n=3.** With three points the maximum possible
+|z| is `(n−1)/√n = 1.155`, so no observation can ever reach a conventional
+outlier threshold. Any z computed here is bounded below the level that would
+flag anything, and reporting one implies a test that was never performed. An
+earlier version of this section quoted z-scores; they are withdrawn.
+
+The finding stands on order statistics instead: **s0 is the middle value of
+three on both metrics.**
+
+- pooled union: s1 0.7606 < **s0 0.7711** < s2 0.7891
+- local mean-over-centres: s1 0.6518 < **s0 0.6637** < s2 0.6941
+
+s0 is bracketed by the other two seeds on both, so nothing distinguishes it as
+anomalous, and its epoch-20 Adam reset left no mark visible at this resolution.
+**No clean rerun of s0 is warranted.** This is a weak statement — three points
+cannot establish much — but it is the statement the data supports.
+
+## Resume seam, pooled s2 (epochs 10–20)
+
+s2 was paused after epoch 14 and resumed from its checkpoint.
+
+| epoch | 10 | 11 | 12 | 13 | **14** | **15** | 16 | 17 | 18 | 19 | 20 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| bal-acc | .7301 | .7314 | .7440 | .7366 | **.7537** | **.7330** | .7518 | .7572 | .7336 | .7419 | .7454 |
+
+The 14→15 seam step is **−0.0207**. The other nine epoch-to-epoch steps in the
+window have mean absolute size **0.0109** and maximum **0.0236**.
+
+The seam is **1.9× the mean absolute step but smaller than the largest ordinary
+step in the same window**, so it sits inside the curve's own scatter and is not
+distinguishable from normal epoch-to-epoch movement.
+
+An earlier claim of "no transient at the seam" was asserted without this
+comparison and overstated the evidence. The correct statement is that a
+transient of this size cannot be detected against this curve's noise — not that
+none occurred. Optimizer state was restored on this resume, which is why one
+would not expect a large transient, but this data does not by itself prove the
+restoration worked.
+
+## Drift: final-minus-peak, all seeds, both arms
+
+Phase 3 reporting policy 1 keeps final-epoch values; peak values are recorded
+as a curve note. A gap over 1 point is the policy-3 drift trigger.
+
+**Pooled**
+
+| seed | final | peak | peak ep | drift |
+|---|---|---|---|---|
+| s0 | 0.7711 | 0.7766 | 32 | −0.0055 |
+| s1 | 0.7606 | 0.7824 | 29 | **−0.0218** |
+| s2 | 0.7891 | 0.7914 | 39 | −0.0023 |
+
+**Local** (per silo, `bal_acc_own`) — drift over 1 point in **16 of 18** cells:
+
+| seed | c0 | c1 | c2 | c3 | c4 | c5 |
+|---|---|---|---|---|---|---|
+| s0 | −0.0186 | **−0.0822** | −0.0245 | −0.0087 | −0.0439 | −0.0556 |
+| s1 | −0.0173 | **−0.0764** | **−0.1473** | −0.0159 | −0.0101 | −0.0420 |
+| s2 | +0.0000 | −0.0230 | −0.0181 | −0.0142 | −0.0404 | **−0.1152** |
+
+Only s0/c3 (−0.0087) and s2/c0 (0.0000) stay inside 1 point.
+
+**This is the largest unresolved issue in Phase 4.** The local arm is not
+converging to its final epoch; it is oscillating well above the size of every
+effect being measured. c2 at s1 loses 14.7 points from its peak, and c5 at s2
+loses 11.5 — both larger than the +0.2547 small-stratum contrast is precise.
+Final-epoch reporting remains correct (best-epoch selection on the test set is
+forbidden by policy 1), but it means the local arm's final numbers are one
+draw from a wide oscillation rather than a converged value.
+
+Two consequences to weigh before the fed arm is interpreted:
+
+1. Per-centre and small-stratum local values carry oscillation noise that the
+   bootstrap CI does not capture — it resamples one fixed epoch's predictions.
+2. The policy-3 remedy already on record — cosine LR decay or a shorter
+   schedule — would apply to the local arm at least as much as to the fed arm
+   it was written for.
+
+No change is made here: the schedule is pre-registered and the analysis is
+frozen at `d1-frozen`. This is recorded for the decision that follows D1.
