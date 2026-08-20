@@ -477,3 +477,98 @@ Two consequences to weigh before the fed arm is interpreted:
 
 No change is made here: the schedule is pre-registered and the analysis is
 frozen at `d1-frozen`. This is recorded for the decision that follows D1.
+
+---
+
+# Pre-registration amendment — drift rule resolution-scaling (2026-08-20)
+
+**Made on drift magnitudes alone, before any federated result was observed.**
+No fed run exists at the time of writing; `results/` contains no
+`fed_*finetune*` file. This amendment cannot have been shaped by a fed outcome.
+
+## What was wrong with the >1pt drift rule
+
+Phase 3 policy 3 set a >1 point final-vs-peak drift as a protocol trigger. That
+threshold was calibrated on the **pooled union curve**, which is scored over
+4,650 test images across 8 classes and moves in steps of ~0.5 points.
+
+It does not transfer to per-silo curves. Balanced accuracy averages recall over
+the classes *present* in a centre's test set, so its smallest possible change —
+its **quantum** — is `1 / (n_classes_present × min_class_count)`:
+
+| centre | test n | classes present | min class count | quantum (pts) |
+|---|---|---|---|---|
+| c0 | 2483 | 8 | 24 | 0.52 |
+| c1 | 791 | 5 | 4 | 5.00 |
+| c2 | 672 | 7 | 1 | 14.29 |
+| c3 | 452 | 7 | 10 | 1.43 |
+| c4 | 164 | 3 | 49 | 0.68 |
+| c5 | 88 | 4 | 1 | **25.00** |
+
+At c5 a single test image changing class flips the metric by 25 points. A
+1-point trigger on such a curve fires on a quantity the metric cannot even
+represent.
+
+The quantum predicts drift far better than silo size does:
+
+| predictor | corr with mean drift |
+|---|---|
+| quantum `1/(n_present × min)` | **−0.812** |
+| quantum `1/(8 × min)` | −0.818 |
+| min class count | +0.558 |
+| log train size | +0.439 |
+
+The earlier reading that drift "scales inversely with train size" was wrong.
+It scales with **metric resolution**, which merely correlates with size.
+
+Direct evidence: `local c5` final is 0.4724 at **both** s0 and s2. The
+checkpoints differ (distinct weight hashes) and the predictions differ on
+**5 of 88 images**, yet every class's correct-count is unchanged
+(6/9, 72/74, 1/4, 0/1), so the metric returns the identical value. The curve
+is quantised so coarsely that five prediction changes are invisible to it.
+
+## The change
+
+1. **Final-vs-peak drift is reclassified as a curve-noise diagnostic, not a
+   protocol trigger, for any curve whose quantum exceeds 0.5 points.** That is
+   every centre except c0 (0.52) and c4 (0.68 — retained as diagnostic-only,
+   being above 0.5). It remains a trigger for the pooled union curve.
+2. **The protocol trigger becomes: a significant negative OLS slope over the
+   final half of training** (epochs/rounds 21–40 of 40, or 26–50 of 50),
+   significance at the curve level, two-sided, α = 0.05.
+
+Measured under the new rule on the existing arms:
+
+- **2 of 21** curves show a significant negative slope: `local s1 c1`
+  (−0.424 pts/ep, t = −4.82) and `local s2 c4` (−0.178, t = −3.52).
+- **8 of 21** show a significant *positive* slope, including `pooled s2`.
+- **11 of 21** show no distinguishable slope.
+
+Under the old rule, 17 of 21 curves "drifted". Under the new one, 2 decline.
+The old rule was measuring quantisation noise, not decline.
+
+## Secondary estimator: tail mean
+
+The **mean of the last 5 epochs/rounds** is pre-specified as a secondary
+estimator, reported alongside the final-epoch primary, never replacing it.
+
+**It applies to per-centre and mean-over-centres metrics only.** It is **not
+computable for the union or the strata** on the existing pooled/local
+checkpoints: those statistics need the concatenated predictions of all six
+per-silo models at each epoch, and only each silo's final checkpoint was
+retained — the rolling checkpoint is overwritten every epoch. Union balanced
+accuracy is not a weighted average of per-centre values, so it cannot be
+reconstructed from the CSVs.
+
+Consequently the tail mean **cannot be applied symmetrically to the strata
+endpoints**, which are the pre-registered primary endpoints. It is therefore a
+diagnostic for curve stability, and no primary claim may rest on it.
+
+## Definition used for "peak mean-over-centres"
+
+The diagnostic peak figures reported for the local arm use the **maximum over
+epochs of the per-epoch mean** — average the six silos at each epoch, then take
+the maximum over epochs. They do **not** use the mean of the six per-silo
+maxima, which lets each silo pick its own best epoch and is larger by
+construction (+0.0276, +0.0195, +0.0352 at s0/s1/s2). Both are test-set
+selection; neither is reportable.
