@@ -8,12 +8,10 @@ Recomputed from saved weights on cuda; 1000 bootstrap resamples, 95% percentile 
 |---|---|---|---|
 | local | `local_finetune_s0` | 0 | 40 |
 | local | `local_finetune_s1` | 1 | 40 |
+| local | `local_finetune_s2` | 2 | 40 |
 | pooled | `pooled_finetune_s0` | 0 | 40 |
 | pooled | `pooled_finetune_s1` | 1 | 40 |
-
-Skipped (no usable checkpoint):
-
-- `pooled_finetune_s2` - missing checkpoint(s): pooled_finetune_s2_final.pt
+| pooled | `pooled_finetune_s2` | 2 | 40 |
 
 ## Headline table
 
@@ -27,21 +25,21 @@ These are **per-cell** uncertainties: each says how precisely that one number is
 
 | row | test n | local (routed) | pooled | gap-closed |
 |---|---|---|---|---|
-| centre 0 | 2483 | 0.7736 +/- 0.0122 [0.747, 0.801] | 0.7846 +/- 0.0017 [0.757, 0.811] | n/a |
-| centre 1 | 791 | 0.7366 +/- 0.0148 [0.667, 0.786] | 0.6884 +/- 0.0223 [0.602, 0.792] | n/a |
-| centre 2 | 672 | 0.6922 +/- 0.0063 [0.650, 0.843] | 0.7428 +/- 0.0840 [0.698, 0.820] | n/a |
-| centre 3 | 452 | 0.6253 +/- 0.0242 [0.564, 0.683] | 0.6187 +/- 0.0293 [0.565, 0.669] | n/a |
-| centre 4 | 164 | 0.6636 +/- 0.0300 [0.592, 0.735] | 0.6837 +/- 0.0202 [0.622, 0.742] | n/a |
-| centre 5 | 88 | 0.4551 +/- 0.0244 [0.350, 0.766] | 0.7541 +/- 0.0053 [0.529, 0.903] | n/a |
-| **stratum: small** (c4, c5) | 252 | 0.5284 +/- 0.0230 [0.486, 0.751] | 0.7812 +/- 0.0109 [0.669, 0.819] | n/a |
-| **stratum: mid** (c2, c3) | 1124 | 0.7094 +/- 0.0264 [0.672, 0.748] | 0.6914 +/- 0.0144 [0.655, 0.727] | n/a |
-| **stratum: large** (c0, c1) | 3274 | 0.7928 +/- 0.0098 [0.767, 0.817] | 0.7977 +/- 0.0023 [0.773, 0.822] | n/a |
-| **pooled union** | 4650 | 0.7662 +/- 0.0024 [0.745, 0.788] | 0.7658 +/- 0.0074 [0.746, 0.785] | n/a |
-| **mean over centres** | 4650 | 0.6577 +/- 0.0085 [0.633, 0.728] | 0.7120 +/- 0.0026 [0.669, 0.748] | n/a |
+| centre 0 | 2483 | 0.7849 +/- 0.0214 [0.759, 0.809] | 0.7940 +/- 0.0163 [0.769, 0.817] | n/a |
+| centre 1 | 791 | 0.7384 +/- 0.0109 [0.688, 0.778] | 0.6840 +/- 0.0175 [0.611, 0.775] | n/a |
+| centre 2 | 672 | 0.7359 +/- 0.0758 [0.695, 0.839] | 0.7723 +/- 0.0784 [0.726, 0.826] | n/a |
+| centre 3 | 452 | 0.6340 +/- 0.0228 [0.573, 0.688] | 0.6283 +/- 0.0266 [0.581, 0.676] | n/a |
+| centre 4 | 164 | 0.6651 +/- 0.0213 [0.596, 0.733] | 0.6880 +/- 0.0161 [0.631, 0.745] | n/a |
+| centre 5 | 88 | 0.4609 +/- 0.0199 [0.360, 0.768] | 0.7610 +/- 0.0125 [0.529, 0.903] | n/a |
+| **stratum: small** (c4, c5) | 252 | 0.5311 +/- 0.0169 [0.490, 0.751] | 0.7857 +/- 0.0110 [0.676, 0.822] | n/a |
+| **stratum: mid** (c2, c3) | 1124 | 0.7161 +/- 0.0220 [0.679, 0.754] | 0.7007 +/- 0.0191 [0.667, 0.735] | n/a |
+| **stratum: large** (c0, c1) | 3274 | 0.8032 +/- 0.0194 [0.781, 0.825] | 0.8051 +/- 0.0129 [0.783, 0.827] | n/a |
+| **pooled union** | 4650 | 0.7753 +/- 0.0158 [0.756, 0.795] | 0.7736 +/- 0.0144 [0.754, 0.792] | n/a |
+| **mean over centres** | 4650 | 0.6699 +/- 0.0218 [0.647, 0.733] | 0.7213 +/- 0.0161 [0.678, 0.753] | n/a |
 
 **Stratum rows** are the pre-registered primary endpoints (2026-08-19), fixed by training-set size before any federated number existed. A stratum is scored over its centres' pooled test images - the same centre-subset statistic that produces the per-centre rows (singleton subset) and the union row (all centres), so the three agree by construction. Pooling is what buys test-set power: 252 images for `small` against 88 for c5 alone.
 
-Local is reported in both aggregations per the Phase 3 policy: routed union **0.7662**, mean over centres **0.6577**. The union is size-weighted, so the largest silo dominates it; the mean weights every centre equally.
+Local is reported in both aggregations per the Phase 3 policy: routed union **0.7753**, mean over centres **0.6699**. The union is size-weighted, so the largest silo dominates it; the mean weights every centre equally.
 
 ## Paired comparisons
 
@@ -51,17 +49,17 @@ The estimator is the **difference of seed-means**: each replicate draws one stra
 
 | comparison | row | delta | 95% CI | significant |
 |---|---|---|---|---|
-| pooled - local | centre 0 | +0.0109 | [-0.0146, +0.0336] | no |
-| pooled - local | centre 1 | -0.0482 | [-0.1348, +0.0372] | no |
-| pooled - local | centre 2 | +0.0506 | [-0.0522, +0.0780] | no |
-| pooled - local | centre 3 | -0.0066 | [-0.0608, +0.0480] | no |
-| pooled - local | centre 4 | +0.0201 | [-0.0461, +0.0816] | no |
-| pooled - local | centre 5 | +0.2990 | [-0.0707, +0.4442] | no |
-| pooled - local | **stratum: small** | +0.2528 | [-0.0420, +0.2883] | no |
-| pooled - local | **stratum: mid** | -0.0180 | [-0.0563, +0.0168] | no |
-| pooled - local | **stratum: large** | +0.0050 | [-0.0177, +0.0262] | no |
-| pooled - local | **pooled union** | -0.0004 | [-0.0193, +0.0175] | no |
-| pooled - local | **mean over centres** | +0.0543 | [-0.0208, +0.0829] | no |
+| pooled - local | centre 0 | +0.0090 | [-0.0121, +0.0292] | no |
+| pooled - local | centre 1 | -0.0544 | [-0.1326, +0.0135] | no |
+| pooled - local | centre 2 | +0.0365 | [-0.0359, +0.0586] | no |
+| pooled - local | centre 3 | -0.0057 | [-0.0491, +0.0377] | no |
+| pooled - local | centre 4 | +0.0229 | [-0.0330, +0.0755] | no |
+| pooled - local | centre 5 | +0.3001 | [-0.0429, +0.4530] | no |
+| pooled - local | **stratum: small** | +0.2547 | [-0.0314, +0.2872] | no |
+| pooled - local | **stratum: mid** | -0.0154 | [-0.0477, +0.0145] | no |
+| pooled - local | **stratum: large** | +0.0019 | [-0.0183, +0.0218] | no |
+| pooled - local | **pooled union** | -0.0017 | [-0.0179, +0.0144] | no |
+| pooled - local | **mean over centres** | +0.0514 | [-0.0163, +0.0765] | no |
 
 0 of 11 comparisons are significant at the 95% level.
 
@@ -71,11 +69,11 @@ Deltas computed seed by seed on the real test set, no resampling. Sign consisten
 
 | comparison | row | per-seed deltas | sign-consistent |
 |---|---|---|---|
-| pooled - local | **stratum: small** | s0 +0.2443, s1 +0.2614 | **yes** |
-| pooled - local | **stratum: mid** | s0 +0.0108, s1 -0.0469 | no - seeds disagree in sign |
-| pooled - local | **stratum: large** | s0 -0.0004, s1 +0.0103 | no - seeds disagree in sign |
-| pooled - local | **mean over centres** | s0 +0.0464, s1 +0.0622 | **yes** |
-| pooled - local | **pooled union** | s0 +0.0065, s1 -0.0073 | no - seeds disagree in sign |
+| pooled - local | **stratum: small** | s0 +0.2443, s1 +0.2614, s2 +0.2584 | **yes** |
+| pooled - local | **stratum: mid** | s0 +0.0108, s1 -0.0469, s2 -0.0101 | no - seeds disagree in sign |
+| pooled - local | **stratum: large** | s0 -0.0004, s1 +0.0103, s2 -0.0043 | no - seeds disagree in sign |
+| pooled - local | **mean over centres** | s0 +0.0464, s1 +0.0622, s2 +0.0456 | **yes** |
+| pooled - local | **pooled union** | s0 +0.0065, s1 -0.0073, s2 -0.0044 | no - seeds disagree in sign |
 
 ## Rare-class recall (< 2% of pooled train)
 
@@ -83,8 +81,8 @@ Balanced accuracy averages these away; a model can look fine overall and still m
 
 | arm | class 5 (1.0%) | class 6 (1.1%) | mean rare | mean common |
 |---|---|---|---|---|
-| local (routed) | 0.700 | 0.952 | 0.826 | 0.746 |
-| pooled | 0.691 | 0.923 | 0.807 | 0.752 |
+| local (routed) | 0.733 | 0.955 | 0.844 | 0.752 |
+| pooled | 0.727 | 0.936 | 0.832 | 0.754 |
 
 ## Caveats
 
